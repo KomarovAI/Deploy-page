@@ -6,6 +6,11 @@ on:
         description: 'Run ID из web-crawler (например: 20479494022)'
         required: true
         type: string
+      source_repo:
+        description: 'Источник artifacts (default: KomarovAI/web-crawler)'
+        required: false
+        default: 'KomarovAI/web-crawler'
+        type: string
       target_repo:
         description: 'Целевой репозиторий (формат: owner/repo)'
         required: true
@@ -49,50 +54,49 @@ jobs:
         run: |
           echo '🔍 Validating inputs...'
           
-          # Validate run_id
           RUN_ID="${{ github.event.inputs.run_id }}"
           if [[ ! "$RUN_ID" =~ ^[0-9]+$ ]]; then
             echo '❌ Invalid run_id format:' "$RUN_ID"
-            echo '   Expected: numeric value (e.g., 20479494022)'
             exit 1
           fi
           
-          # Validate and trim target_repo
+          SOURCE_REPO="${{ github.event.inputs.source_repo }}"
+          SOURCE_REPO=$(echo "$SOURCE_REPO" | xargs)
+          if [[ ! "$SOURCE_REPO" =~ ^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?/[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$ ]]; then
+            echo '❌ Invalid source_repo format:' "$SOURCE_REPO"
+            exit 1
+          fi
+          
           TARGET_REPO="${{ github.event.inputs.target_repo }}"
-          TARGET_REPO=$(echo "$TARGET_REPO" | xargs)  # Trim spaces
-          
-          # Strict format check: exactly 2 segments
+          TARGET_REPO=$(echo "$TARGET_REPO" | xargs)
           if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?/[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$ ]]; then
-            echo '❌ Invalid target repository format:' "$TARGET_REPO"
-            echo '   Expected: owner/repo'
-            echo '   Examples: john/my-site, org-name/project'
+            echo '❌ Invalid target_repo format:' "$TARGET_REPO"
             exit 1
           fi
           
-          # Validate base_href
           BASE_HREF="${{ github.event.inputs.base_href }}"
           if [[ ! "$BASE_HREF" =~ ^/.*/?$ ]]; then
             echo '❌ Invalid base_href:' "$BASE_HREF"
-            echo '   Expected: path starting with / (e.g., "/" or "/project/")'
             exit 1
           fi
           
-          # Ensure base_href ends with / if not root
           if [ "$BASE_HREF" != "/" ] && [[ ! "$BASE_HREF" =~ /$ ]]; then
             BASE_HREF="${BASE_HREF}/"
           fi
           
           ARTIFACT_NAME="site_archive-${RUN_ID}"
           echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          echo "source_repo=$SOURCE_REPO" >> $GITHUB_OUTPUT
           echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
           echo "base_href=$BASE_HREF" >> $GITHUB_OUTPUT
-          echo '✅ Inputs validated successfully'
+          echo '✅ Inputs validated'
           echo ''
           echo "📋 Parameters:"
           echo "  - Run ID: $RUN_ID"
-          echo "  - Target repo: $TARGET_REPO"
-          echo "  - Target branch: ${{ github.event.inputs.target_branch }}"
+          echo "  - Source: $SOURCE_REPO"
+          echo "  - Target: $TARGET_REPO"
+          echo "  - Branch: ${{ github.event.inputs.target_branch }}"
           echo "  - Base href: $BASE_HREF"
       
       - name: Checkout Deploy-page (for scripts)
@@ -101,12 +105,12 @@ jobs:
           path: deploy-page-repo
           fetch-depth: 1
       
-      - name: Download artifact from web-crawler
+      - name: Download artifact
         id: download
         uses: dawidd6/action-download-artifact@v11
         with:
           github_token: ${{ secrets.EXTERNAL_REPO_PAT }}
-          repo: KomarovAI/web-crawler
+          repo: ${{ steps.validate.outputs.source_repo }}
           run_id: ${{ steps.validate.outputs.run_id }}
           name: ${{ steps.validate.outputs.artifact_name }}
           path: site_content
@@ -117,7 +121,6 @@ jobs:
         run: |
           if [ ! -d "site_content" ] || [ -z "$(ls -A "site_content" 2>/dev/null)" ]; then
             echo '❌ Artifact not found or empty'
-            echo '📁 Directory listing:'
             ls -R . || true
             exit 1
           fi
@@ -137,67 +140,56 @@ jobs:
           fetch-depth: 0
           path: target-repo
       
+      - name: Configure git
+        working-directory: target-repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo '✅ Git configured'
+      
+      - name: Create snapshot for rollback
+        id: snapshot
+        working-directory: target-repo
+        run: |
+          SNAPSHOT_SHA=$(git rev-parse HEAD)
+          echo "snapshot_sha=$SNAPSHOT_SHA" >> $GITHUB_OUTPUT
+          echo "📸 Snapshot created: $SNAPSHOT_SHA"
+      
       - name: Clean repository
         id: clean
         working-directory: target-repo
         run: |
           echo '🧹 Cleaning repository...'
-          
-          # Show initial state
-          echo '📊 Initial state:'
-          ls -la
-          echo ''
-          
-          # Remove ALL files except .git and .github
-          find . -mindepth 1 -maxdepth 1 \
-            -not -name '.git' \
-            -not -name '.github' \
-            -exec rm -rf {} + 2>/dev/null || true
-          
-          # Hard reset git to clean state
+          find . -mindepth 1 -maxdepth 1 -not -name '.git' -not -name '.github' -exec rm -rf {} + 2>/dev/null || true
           git reset --hard HEAD 2>/dev/null || true
-          
-          # Clean untracked files
           git clean -fdx 2>/dev/null || true
-          
-          # Remove git staging area
           git reset HEAD --hard 2>/dev/null || true
-          
-          # Show final state
           echo '✅ Repository cleaned'
-          echo '📊 Final state:'
-          ls -la
-          echo ''
-          echo 'Files remaining (should only be .git and .github):'
-          find . -mindepth 1 -maxdepth 1 -type d -o -type f 2>/dev/null | grep -v '^\./\.' || echo '  (clean)'
       
       - name: Copy website files
         id: deploy
         run: |
           echo '📦 Copying website files...'
           
-          # Verify source exists
           if [ ! -d "$GITHUB_WORKSPACE/site_content" ]; then
             echo '❌ Source directory not found'
             exit 1
           fi
           
-          # Count files to copy
           SOURCE_FILES=$(find "$GITHUB_WORKSPACE/site_content" -type f | wc -l)
           echo "Source files: $SOURCE_FILES"
           
-          # Copy all content
           cp -r "$GITHUB_WORKSPACE/site_content"/* "$GITHUB_WORKSPACE/target-repo/" || {
             echo '❌ Failed to copy files'
             exit 1
           }
           
-          # Verify copy
           DEST_FILES=$(find "$GITHUB_WORKSPACE/target-repo" -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
           echo "Deployed files: $DEST_FILES"
           
           if [ "$SOURCE_FILES" -ne "$DEST_FILES" ]; then
-            echo "⚠️  Warning: File count mismatch (source: $SOURCE_FILES, dest: $DEST_FILES)"
+            echo "❌ CRITICAL: File count mismatch (source: $SOURCE_FILES, dest: $DEST_FILES)"
+            exit 1
           fi
           
           echo "deployed_files=$DEST_FILES" >> $GITHUB_OUTPUT
@@ -218,10 +210,11 @@ jobs:
             exit 1
           fi
           
-          bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.sh" || {
-            echo '❌ Path fixing script failed'
+          if ! bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.sh"; then
+            echo '❌ Path fixing failed - rolling back'
+            git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
             exit 1
-          }
+          fi
           
           echo '✅ Paths fixed successfully'
       
@@ -234,19 +227,14 @@ jobs:
           if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.sh" ]; then
             echo '⚠️  validate-deploy.sh not found, skipping validation'
           else
-            bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.sh" || {
-              echo '⚠️  Validation completed with warnings'
-            }
+            if ! bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.sh"; then
+              echo '❌ Validation failed - rolling back'
+              git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
+              exit 1
+            fi
           fi
           
-          echo '✅ Validation step completed'
-      
-      - name: Configure git
-        working-directory: target-repo
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          echo '✅ Git configured'
+          echo '✅ Validation completed'
       
       - name: Stage files and commit
         id: commit
@@ -257,30 +245,18 @@ jobs:
         run: |
           echo '📝 Staging and committing files...'
           
-          # Show git status before
-          echo '📊 Git status before:'
-          git status --short || echo '  (clean)'
-          echo ''
-          
-          # Add all files
           git add -A --force
           
-          # Show what will be committed
-          echo '📋 Files staged for commit:'
-          git diff --cached --name-status || echo '  (none)'
-          echo ''
-          
-          # Check if there are changes to commit
           if ! git diff-index --quiet HEAD --; then
             echo '✅ Changes detected, creating commit...'
             git commit -m "$COMMIT_MSG" -m "Deploy: $COMMIT_MSG at $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || {
-              echo '❌ Commit failed!'
+              echo '❌ Commit failed'
               exit 1
             }
           else
-            echo '⚠️  No staged changes, creating empty commit...'
-            git commit --allow-empty -m "$COMMIT_MSG" -m "Deploy: $COMMIT_MSG at $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || {
-              echo '❌ Empty commit failed!'
+            echo '✓ No changes detected - repository already up-to-date'
+            git commit --allow-empty -m "$COMMIT_MSG" -m "Timestamp: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || {
+              echo '❌ Empty commit failed'
               exit 1
             }
           fi
@@ -298,19 +274,13 @@ jobs:
         run: |
           echo '🚀 Force pushing to '"$TARGET_BRANCH"'...'
           
-          # Show log
-          echo '📝 Last commits:'
-          git log --oneline -n 5 || true
-          echo ''
-          
-          # Force push with verbose output
           if git push --force --verbose origin "$TARGET_BRANCH"; then
             echo ''
             echo '✅ Force push successful'
             echo "branch=$TARGET_BRANCH" >> $GITHUB_OUTPUT
           else
             echo ''
-            echo '❌ Force push failed!'
+            echo '❌ Force push failed'
             git status
             exit 1
           fi
@@ -322,7 +292,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ steps.commit.outputs.status }}" = "success" ]; then
-            echo "**Status:** ✅ **SUCCESS (DEPLOYED)**" >> $GITHUB_STEP_SUMMARY
+            echo "**Status:** ✅ **SUCCESS**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "## 📊 Details" >> $GITHUB_STEP_SUMMARY
             echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
@@ -330,22 +300,14 @@ jobs:
             echo "| Repository | [\`${{ steps.validate.outputs.target_repo }}\`](https://github.com/${{ steps.validate.outputs.target_repo }}) |" >> $GITHUB_STEP_SUMMARY
             echo "| Branch | \`${{ github.event.inputs.target_branch }}\` |" >> $GITHUB_STEP_SUMMARY
             echo "| Commit | [\`${{ steps.commit.outputs.commit_sha }}\`](https://github.com/${{ steps.validate.outputs.target_repo }}/commit/${{ steps.commit.outputs.commit_sha }}) |" >> $GITHUB_STEP_SUMMARY
-            echo "| Files Deployed | **${{ steps.deploy.outputs.deployed_files }}** |" >> $GITHUB_STEP_SUMMARY
-            echo "| Artifact Size | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Message | \`${{ github.event.inputs.commit_message }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Files | **${{ steps.deploy.outputs.deployed_files }}** |" >> $GITHUB_STEP_SUMMARY
+            echo "| Size | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Base href | \`${{ steps.validate.outputs.base_href }}\` |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "✅ All checks passed!" >> $GITHUB_STEP_SUMMARY
           else
             echo "**Status:** ❌ **FAILED**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Check workflow logs for details." >> $GITHUB_STEP_SUMMARY
+            echo "Rollback to: \`${{ steps.snapshot.outputs.snapshot_sha }}\`" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 🔗 Links" >> $GITHUB_STEP_SUMMARY
-          echo "- [Repository](https://github.com/${{ steps.validate.outputs.target_repo }})" >> $GITHUB_STEP_SUMMARY
-          echo "- [Commits](https://github.com/${{ steps.validate.outputs.target_repo }}/commits/${{ github.event.inputs.target_branch }})" >> $GITHUB_STEP_SUMMARY
-          echo "- [Actions](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "*Deployed at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')*" >> $GITHUB_STEP_SUMMARY
+          echo "*Deployed: $(date -u +'%Y-%m-%d %H:%M:%S UTC')*" >> $GITHUB_STEP_SUMMARY
