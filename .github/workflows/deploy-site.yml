@@ -1,3 +1,4 @@
+88
 name: Deploy Website to Target Repository
 on:
   workflow_dispatch:
@@ -85,7 +86,7 @@ jobs:
           token: ${{ secrets.EXTERNAL_REPO_PAT }}
           ref: ${{ github.event.inputs.target_branch }}
           fetch-depth: 1
-      - name: Wipe repository
+              Wipe repository
         id: wipe
         run: |
           echo '🧹 Clearing target repository...'
@@ -114,7 +115,7 @@ jobs:
         id: fix_paths
         run: |
           echo '🔧 Fixing absolute paths for GitHub Pages...'
-          bash "../deploy-page-repo/.github/scripts/fix-paths.sh"
+          bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.sh"
           echo '✅ Paths fixed successfully'
       - name: Configure git
         run: |
