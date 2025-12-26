@@ -1,0 +1,183 @@
+name: Deploy Website to Target Repository
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_name:
+        description: 'Полное имя артефакта (например: site_archive-20479494022)'
+        required: true
+        type: string
+      target_repo:
+        description: 'Целевой репозиторий (формат: owner/repo)'
+        required: true
+        type: string
+      target_branch:
+        description: 'Целевая ветка (default: main)'
+        required: false
+        default: 'main'
+        type: string
+      commit_message:
+        description: 'Сообщение коммита'
+        required: false
+        default: 'chore: deploy website'
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    name: Deploy Website to Target Repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Validate inputs
+        id: validate
+        run: |
+          echo '🔍 Validating inputs...'
+          
+          ARTIFACT_NAME="${{ github.event.inputs.artifact_name }}"
+          if [[ ! "$ARTIFACT_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo '❌ Invalid artifact name format:' "$ARTIFACT_NAME"
+            exit 1
+          fi
+          
+          TARGET_REPO="${{ github.event.inputs.target_repo }}"
+          if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
+            echo '❌ Invalid target repository format:' "$TARGET_REPO"
+            exit 1
+          fi
+          
+          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+          echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
+          echo '✅ Inputs validated successfully'
+
+      - name: Download artifact
+        id: download
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.validate.outputs.artifact_name }}
+          path: site_content
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify artifact
+        id: verify
+        run: |
+          if [ ! -d "site_content" ] || [ -z "$(ls -A "site_content" 2>/dev/null)" ]; then
+            echo '❌ Artifact not found or empty'
+            exit 1
+          fi
+          
+          FILE_COUNT=$(find site_content -type f | wc -l)
+          DIR_SIZE=$(du -sh site_content | cut -f1)
+          
+          echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
+          echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
+          echo '✅ Artifact verified:' "$FILE_COUNT files | $DIR_SIZE"
+
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.validate.outputs.target_repo }}
+          token: ${{ secrets.EXTERNAL_REPO_PAT }}
+          ref: ${{ github.event.inputs.target_branch }}
+          fetch-depth: 1
+
+      - name: Wipe repository
+        id: wipe
+        run: |
+          echo '🧹 Clearing target repository...'
+          
+          PRESERVE_FILES=(".git" ".github" ".gitignore" "README.md" "LICENSE")
+          
+          for file in "${PRESERVE_FILES[@]}"; do
+            if [ -e "$file" ]; then
+              mv "$file" "/tmp/${file##*/}.bak" 2>/dev/null || true
+            fi
+          done
+          
+          find . -mindepth 1 -maxdepth 1 -not -name '.*' -exec rm -rf {} + 2>/dev/null || true
+          
+          for file in "${PRESERVE_FILES[@]}"; do
+            if [ -e "/tmp/${file##*/}.bak" ]; then
+              mv "/tmp/${file##*/}.bak" "$file" 2>/dev/null || true
+            fi
+          done
+          
+          echo '✅ Repository wiped successfully'
+
+      - name: Deploy website
+        id: deploy
+        run: |
+          echo '📦 Deploying website...'
+          
+          cp -r ../site_content/* . 2>/dev/null || true
+          
+          FILE_COUNT=$(find . -mindepth 1 -type f | wc -l)
+          echo "deployed_files=$FILE_COUNT" >> $GITHUB_OUTPUT
+          echo '✅ Website deployed:' "$FILE_COUNT files"
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit and push
+        id: commit
+        env:
+          COMMIT_MSG: ${{ github.event.inputs.commit_message }}
+          TARGET_BRANCH: ${{ github.event.inputs.target_branch }}
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo '⚠️ No changes to commit'
+            echo "status=no_changes" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          git add -A
+          
+          FULL_MSG="${COMMIT_MSG}
+          
+Artifact: ${{ steps.validate.outputs.artifact_name }}
+Run ID: ${{ github.run_id }}
+Timestamp: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
+Branch: ${TARGET_BRANCH}"
+          
+          git commit -m "$FULL_MSG"
+          git push origin "${TARGET_BRANCH}"
+          
+          COMMIT_SHA=$(git rev-parse HEAD)
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo '✅ Pushed to ${{ steps.validate.outputs.target_repo }}'
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "═══════════════════════════════════════════════════════════════" | tee -a $GITHUB_STEP_SUMMARY
+          echo "📊 DEPLOYMENT SUMMARY" | tee -a $GITHUB_STEP_SUMMARY
+          echo "═══════════════════════════════════════════════════════════════" | tee -a $GITHUB_STEP_SUMMARY
+          echo 'Artifact:' "${{ steps.validate.outputs.artifact_name }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo 'Target Repository:' "${{ steps.validate.outputs.target_repo }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo 'Target Branch:' "${{ github.event.inputs.target_branch }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo "───────────────────────────────────────────────────────────────" | tee -a $GITHUB_STEP_SUMMARY
+          echo 'Files in Artifact:' "${{ steps.verify.outputs.file_count }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo 'Artifact Size:' "${{ steps.verify.outputs.dir_size }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo 'Files Deployed:' "${{ steps.deploy.outputs.deployed_files }}" | tee -a $GITHUB_STEP_SUMMARY
+          echo "───────────────────────────────────────────────────────────────" | tee -a $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.commit.outputs.status }}" = "success" ]; then
+            echo '✅ Status: DEPLOYED SUCCESSFULLY' | tee -a $GITHUB_STEP_SUMMARY
+            echo 'Commit SHA:' "${{ steps.commit.outputs.commit_sha }}" | tee -a $GITHUB_STEP_SUMMARY
+            echo '🔗 View: https://github.com/${{ steps.validate.outputs.target_repo }}/commit/${{ steps.commit.outputs.commit_sha }}' | tee -a $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.commit.outputs.status }}" = "no_changes" ]; then
+            echo '⚠️ Status: NO CHANGES' | tee -a $GITHUB_STEP_SUMMARY
+          else
+            echo '❌ Status: FAILED' | tee -a $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "═══════════════════════════════════════════════════════════════" | tee -a $GITHUB_STEP_SUMMARY
