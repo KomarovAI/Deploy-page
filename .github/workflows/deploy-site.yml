@@ -154,6 +154,7 @@ Branch: ${TARGET_BRANCH}"
           echo "status=success" >> $GITHUB_OUTPUT
           echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
           echo '✅ Pushed to ${{ steps.validate.outputs.target_repo }}'
+          
       - name: Summary
         if: always()
         run: |
