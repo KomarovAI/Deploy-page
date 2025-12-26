@@ -3,8 +3,8 @@ name: Deploy Website to Target Repository
 on:
   workflow_dispatch:
     inputs:
-      artifact_name:
-        description: 'Полное имя артефакта (например: site_archive-20479494022)'
+      run_id:
+        description: 'Run ID из web-crawler (например: 20479494022)'
         required: true
         type: string
       target_repo:
@@ -39,48 +39,55 @@ jobs:
         id: validate
         run: |
           echo '🔍 Validating inputs...'
-          
-          ARTIFACT_NAME="${{ github.event.inputs.artifact_name }}"
-          if [[ ! "$ARTIFACT_NAME" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-            echo '❌ Invalid artifact name format:' "$ARTIFACT_NAME"
+
+          RUN_ID="${{ github.event.inputs.run_id }}"
+          if [[ ! "$RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo '❌ Invalid run_id format:' "$RUN_ID"
             exit 1
           fi
-          
+
           TARGET_REPO="${{ github.event.inputs.target_repo }}"
-          if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
+          if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]; then
             echo '❌ Invalid target repository format:' "$TARGET_REPO"
             exit 1
           fi
-          
-          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+
+          ARTIFACT_NAME="site_archive-${RUN_ID}"
+
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
           echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
+          echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
           echo '✅ Inputs validated successfully'
 
-      - name: Download artifact
+      - name: Download artifact from web-crawler
         id: download
-        uses: actions/download-artifact@3b5a3ab82aa3cde19abf954996d8a08cf04a4d91
+        uses: dawidd6/action-download-artifact@v11
         with:
+          github_token: ${{ secrets.EXTERNAL_REPO_PAT }}
+          repo: KomarovAI/web-crawler
+          run_id: ${{ steps.validate.outputs.run_id }}
           name: ${{ steps.validate.outputs.artifact_name }}
           path: site_content
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          search_artifacts: true
 
       - name: Verify artifact
         id: verify
         run: |
           if [ ! -d "site_content" ] || [ -z "$(ls -A "site_content" 2>/dev/null)" ]; then
             echo '❌ Artifact not found or empty'
+            ls -R .
             exit 1
           fi
-          
+
           FILE_COUNT=$(find site_content -type f | wc -l)
           DIR_SIZE=$(du -sh site_content | cut -f1)
-          
+
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
           echo '✅ Artifact verified:' "$FILE_COUNT files | $DIR_SIZE"
 
       - name: Checkout target repository
-        uses: actions/checkout@2541b1294d2d7f6f05a9482eedb8fdc039d9f19d
+        uses: actions/checkout@v4
         with:
           repository: ${{ steps.validate.outputs.target_repo }}
           token: ${{ secrets.EXTERNAL_REPO_PAT }}
@@ -91,32 +98,32 @@ jobs:
         id: wipe
         run: |
           echo '🧹 Clearing target repository...'
-          
+
           PRESERVE_FILES=(".git" ".github" ".gitignore" "README.md" "LICENSE")
-          
+
           for file in "${PRESERVE_FILES[@]}"; do
             if [ -e "$file" ]; then
               mv "$file" "/tmp/${file##*/}.bak" 2>/dev/null || true
             fi
           done
-          
+
           find . -mindepth 1 -maxdepth 1 -not -name '.*' -exec rm -rf {} + 2>/dev/null || true
-          
+
           for file in "${PRESERVE_FILES[@]}"; do
             if [ -e "/tmp/${file##*/}.bak" ]; then
               mv "/tmp/${file##*/}.bak" "$file" 2>/dev/null || true
             fi
           done
-          
+
           echo '✅ Repository wiped successfully'
 
       - name: Deploy website
         id: deploy
         run: |
           echo '📦 Deploying website...'
-          
+
           cp -r ../site_content/* . 2>/dev/null || true
-          
+
           FILE_COUNT=$(find . -mindepth 1 -type f | wc -l)
           echo "deployed_files=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo '✅ Website deployed:' "$FILE_COUNT files"
@@ -137,6 +144,8 @@ jobs:
             echo "status=no_changes" >> $GITHUB_OUTPUT
             exit 0
           fi
-          
+
           git add -A
-          
+          git commit -m "$COMMIT_MSG"
+          git push origin "$TARGET_BRANCH"
+          echo "status=committed" >> $GITHUB_OUTPUT
