@@ -20,41 +20,82 @@ on:
         required: false
         default: 'chore: deploy website'
         type: string
+      base_href:
+        description: 'Base path for site (e.g., "/" or "/project-name/")'
+        required: false
+        default: '/'
+        type: string
+
 permissions:
   contents: read
   actions: read
+
 jobs:
   deploy:
     name: Deploy Website to Target Repository
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
       actions: read
+    outputs:
+      deploy_status: ${{ steps.commit.outputs.status }}
+      deployed_files: ${{ steps.deploy.outputs.deployed_files }}
+      commit_sha: ${{ steps.commit.outputs.commit_sha }}
+    
     steps:
       - name: Validate inputs
         id: validate
         run: |
           echo '🔍 Validating inputs...'
+          
+          # Validate run_id
           RUN_ID="${{ github.event.inputs.run_id }}"
           if [[ ! "$RUN_ID" =~ ^[0-9]+$ ]]; then
             echo '❌ Invalid run_id format:' "$RUN_ID"
+            echo '   Expected: numeric value (e.g., 20479494022)'
             exit 1
           fi
+          
+          # Validate and trim target_repo
           TARGET_REPO="${{ github.event.inputs.target_repo }}"
-          if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]]; then
+          TARGET_REPO=$(echo "$TARGET_REPO" | xargs)  # Trim spaces
+          
+          # Strict format check: exactly 2 segments
+          if [[ ! "$TARGET_REPO" =~ ^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?/[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$ ]]; then
             echo '❌ Invalid target repository format:' "$TARGET_REPO"
+            echo '   Expected: owner/repo'
+            echo '   Examples: john/my-site, org-name/project'
             exit 1
           fi
+          
+          # Validate base_href
+          BASE_HREF="${{ github.event.inputs.base_href }}"
+          if [[ ! "$BASE_HREF" =~ ^/.*/?$ ]]; then
+            echo '❌ Invalid base_href:' "$BASE_HREF"
+            echo '   Expected: path starting with / (e.g., "/" or "/project/")'
+            exit 1
+          fi
+          
           ARTIFACT_NAME="site_archive-${RUN_ID}"
           echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
           echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+          echo "base_href=$BASE_HREF" >> $GITHUB_OUTPUT
           echo '✅ Inputs validated successfully'
+          echo ''
+          echo "📋 Parameters:"
+          echo "  - Run ID: $RUN_ID"
+          echo "  - Target repo: $TARGET_REPO"
+          echo "  - Target branch: ${{ github.event.inputs.target_branch }}"
+          echo "  - Base href: $BASE_HREF"
+      
       - name: Checkout Deploy-page (for scripts)
         uses: actions/checkout@v4
         with:
           path: deploy-page-repo
           fetch-depth: 1
+      
       - name: Download artifact from web-crawler
         id: download
         uses: dawidd6/action-download-artifact@v11
@@ -65,19 +106,23 @@ jobs:
           name: ${{ steps.validate.outputs.artifact_name }}
           path: site_content
           search_artifacts: true
+      
       - name: Verify artifact
         id: verify
         run: |
           if [ ! -d "site_content" ] || [ -z "$(ls -A "site_content" 2>/dev/null)" ]; then
             echo '❌ Artifact not found or empty'
-            ls -R .
+            echo '📁 Directory listing:'
+            ls -R . || true
             exit 1
           fi
           FILE_COUNT=$(find site_content -type f | wc -l)
           DIR_SIZE=$(du -sh site_content | cut -f1)
           echo "file_count=$FILE_COUNT" >> $GITHUB_OUTPUT
           echo "dir_size=$DIR_SIZE" >> $GITHUB_OUTPUT
-          echo '✅ Artifact verified:' "$FILE_COUNT files | $DIR_SIZE"
+          echo '✅ Artifact verified'
+          echo "   Files: $FILE_COUNT | Size: $DIR_SIZE"
+      
       - name: Checkout target repository
         uses: actions/checkout@v4
         with:
@@ -85,53 +130,139 @@ jobs:
           token: ${{ secrets.EXTERNAL_REPO_PAT }}
           ref: ${{ github.event.inputs.target_branch }}
           fetch-depth: 1
-              Wipe repository
+      
+      - name: Wipe repository
         id: wipe
         run: |
           echo '🧹 Clearing target repository...'
           PRESERVE_FILES=(".git" ".github" ".gitignore" "README.md" "LICENSE")
+          
+          # Backup important files
           for file in "${PRESERVE_FILES[@]}"; do
             if [ -e "$file" ]; then
               mv "$file" "/tmp/${file##*/}.bak" 2>/dev/null || true
             fi
           done
+          
+          # Remove everything
           find . -mindepth 1 -maxdepth 1 -not -name '.*' -exec rm -rf {} + 2>/dev/null || true
+          
+          # Restore important files
           for file in "${PRESERVE_FILES[@]}"; do
             if [ -e "/tmp/${file##*/}.bak" ]; then
               mv "/tmp/${file##*/}.bak" "$file" 2>/dev/null || true
             fi
           done
           echo '✅ Repository wiped successfully'
+      
       - name: Deploy website
         id: deploy
         run: |
           echo '📦 Deploying website...'
-          cp -r ../site_content/* . 2>/dev/null || true
+          if ! cp -r ../site_content/* . 2>/dev/null; then
+            echo '❌ Failed to copy website files'
+            exit 1
+          fi
           FILE_COUNT=$(find . -mindepth 1 -type f | wc -l)
           echo "deployed_files=$FILE_COUNT" >> $GITHUB_OUTPUT
-          echo '✅ Website deployed:' "$FILE_COUNT files"
+          echo '✅ Website deployed'
+          echo "   Files: $FILE_COUNT"
+      
       - name: Fix paths for GitHub Pages
         id: fix_paths
+        env:
+          BASE_HREF: ${{ steps.validate.outputs.base_href }}
         run: |
           echo '🔧 Fixing absolute paths for GitHub Pages...'
+          
+          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.sh" ]; then
+            echo '❌ fix-paths.sh script not found'
+            exit 1
+          fi
+          
           bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.sh"
+          
+          # Add or update base href if needed (optional)
+          if [ "$BASE_HREF" != "/" ]; then
+            find . -type f -name "*.html" | while read file; do
+              if ! grep -q "<base href" "$file" 2>/dev/null; then
+                sed -i "1a\    <base href=\"$BASE_HREF\" />" "$file"
+              fi
+            done
+            echo "   Base href set to: $BASE_HREF"
+          fi
+          
           echo '✅ Paths fixed successfully'
+      
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+      
       - name: Commit and push
         id: commit
         env:
           COMMIT_MSG: ${{ github.event.inputs.commit_message }}
           TARGET_BRANCH: ${{ github.event.inputs.target_branch }}
         run: |
+          echo '📋 Checking for changes...'
           if git diff --quiet && git diff --cached --quiet; then
-            echo '⚠️ No changes to commit'
+            echo '⚠️  No changes to commit'
             echo "status=no_changes" >> $GITHUB_OUTPUT
             exit 0
           fi
+          
+          echo '📝 Creating commit...'
           git add -A
-          git commit -m "$COMMIT_MSG"
-          git push origin "$TARGET_BRANCH"
+          git commit -m "$COMMIT_MSG" || { echo '❌ Commit failed'; exit 1; }
+          
+          echo '🚀 Pushing to $TARGET_BRANCH...'
+          if ! git push origin "$TARGET_BRANCH"; then
+            echo '❌ Push to $TARGET_BRANCH failed!'
+            echo '📌 Check:'
+            echo '   - Branch protection rules'
+            echo '   - Token permissions (needs contents:write for target repo)'
+            echo '   - Network connectivity'
+            exit 1
+          fi
+          
+          echo '✅ Push successful'
+          COMMIT_SHA=$(git rev-parse HEAD)
           echo "status=committed" >> $GITHUB_OUTPUT
+          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+      
+      - name: Create deployment summary
+        if: always()
+        run: |
+          echo "# 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.commit.outputs.status }}" = "committed" ]; then
+            echo "**Status:** ✅ **SUCCESS**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 📊 Details" >> $GITHUB_STEP_SUMMARY
+            echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Repository | ${{ steps.validate.outputs.target_repo }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Branch | ${{ github.event.inputs.target_branch }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Commit | \`${{ steps.commit.outputs.commit_sha }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Files Deployed | ${{ steps.deploy.outputs.deployed_files }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Artifact Size | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Message | ${{ github.event.inputs.commit_message }} |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ steps.commit.outputs.status }}" = "no_changes" ]; then
+            echo "**Status:** ℹ️  **NO CHANGES**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The deployment completed successfully but found no changes to commit." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** ❌ **FAILED**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check workflow logs for details." >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🔗 Links" >> $GITHUB_STEP_SUMMARY
+          echo "- [View Repository](https://github.com/${{ steps.validate.outputs.target_repo }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [View Commits](https://github.com/${{ steps.validate.outputs.target_repo }}/commits/${{ github.event.inputs.target_branch }})" >> $GITHUB_STEP_SUMMARY
+          echo "- [View Actions](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "*Deployed at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')*" >> $GITHUB_STEP_SUMMARY
