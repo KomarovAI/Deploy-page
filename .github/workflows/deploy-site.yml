@@ -170,14 +170,14 @@ Branch: ${TARGET_BRANCH}"
           echo 'Files Deployed:' "${{ steps.deploy.outputs.deployed_files }}" | tee -a $GITHUB_STEP_SUMMARY
           echo "───────────────────────────────────────────────────────────────" | tee -a $GITHUB_STEP_SUMMARY
           
-          if [ "${{ steps.commit.outputs.status }}" = "success" ]; then
-            echo '✅ Status: DEPLOYED SUCCESSFULLY' | tee -a $GITHUB_STEP_SUMMARY
-            echo 'Commit SHA:' "${{ steps.commit.outputs.commit_sha }}" | tee -a $GITHUB_STEP_SUMMARY
-            echo '🔗 View: https://github.com/${{ steps.validate.outputs.target_repo }}/commit/${{ steps.commit.outputs.commit_sha }}' | tee -a $GITHUB_STEP_SUMMARY
-          elif [ "${{ steps.commit.outputs.status }}" = "no_changes" ]; then
-            echo '⚠️ Status: NO CHANGES' | tee -a $GITHUB_STEP_SUMMARY
-          else
-            echo '❌ Status: FAILED' | tee -a $GITHUB_STEP_SUMMARY
-          fi
+            if [ "${{ steps.commit.outputs.status }}" = "success" ]; then
+              echo '✅ Status: DEPLOYED SUCCESSFULLY' | tee -a $GITHUB_STEP_SUMMARY
+              echo 'Commit SHA:' "${{ steps.commit.outputs.commit_sha }}" | tee -a $GITHUB_STEP_SUMMARY
+              echo '🔗 View: https://github.com/${{ steps.validate.outputs.target_repo }}/commit/${{ steps.commit.outputs.commit_sha }}' | tee -a $GITHUB_STEP_SUMMARY
+            elif [ "${{ steps.commit.outputs.status }}" = "no_changes" ]; then
+              echo '⚠️ Status: NO CHANGES' | tee -a $GITHUB_STEP_SUMMARY
+            else
+              echo '❌ Status: FAILED' | tee -a $GITHUB_STEP_SUMMARY
+            fi
           
           echo "═══════════════════════════════════════════════════════════════" | tee -a $GITHUB_STEP_SUMMARY
