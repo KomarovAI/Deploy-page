@@ -21,7 +21,7 @@ on:
         default: 'chore: deploy website'
         type: string
       base_href:
-        description: 'Base path for site (e.g., "/" or "/project-name/")'
+        description: 'Base path for site (e.g., "/" or "/archived-sites/")'
         required: false
         default: '/'
         type: string
@@ -75,6 +75,11 @@ jobs:
             echo '❌ Invalid base_href:' "$BASE_HREF"
             echo '   Expected: path starting with / (e.g., "/" or "/project/")'
             exit 1
+          fi
+          
+          # Ensure base_href ends with / if not root
+          if [ "$BASE_HREF" != "/" ] && [[ ! "$BASE_HREF" =~ /$ ]]; then
+            BASE_HREF="${BASE_HREF}/"
           fi
           
           ARTIFACT_NAME="site_archive-${RUN_ID}"
@@ -167,7 +172,7 @@ jobs:
           BASE_HREF: ${{ steps.validate.outputs.base_href }}
         run: |
           set -e
-          echo '🔧 Fixing absolute paths for GitHub Pages...'
+          echo '🔧 Fixing paths for GitHub Pages...'
           
           if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.sh" ]; then
             echo '❌ fix-paths.sh script not found'
@@ -178,18 +183,6 @@ jobs:
             echo '❌ Path fixing script failed'
             exit 1
           }
-          
-          if [ "$BASE_HREF" != "/" ]; then
-            echo "   Setting base href to: $BASE_HREF"
-            find . -type f -name "*.html" -print0 | while IFS= read -r -d '' file; do
-              if ! grep -q '<base href' "$file" 2>/dev/null; then
-                if grep -q '<head' "$file" 2>/dev/null; then
-                  awk '/<head[^>]*>/{print; print "    <base href=\"'"$BASE_HREF"'\" />"; next} {print}' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
-                fi
-              fi
-            done
-            echo "   ✅ Base href tags added to HTML files"
-          fi
           
           echo '✅ Paths fixed successfully'
       
@@ -239,6 +232,7 @@ jobs:
             echo "| Files Deployed | ${{ steps.deploy.outputs.deployed_files }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Artifact Size | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Message | ${{ github.event.inputs.commit_message }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Base href | ${{ steps.validate.outputs.base_href }} |" >> $GITHUB_STEP_SUMMARY
           else
             echo "**Status:** ❌ **FAILED**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
