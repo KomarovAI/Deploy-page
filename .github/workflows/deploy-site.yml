@@ -114,7 +114,7 @@ jobs:
         id: fix_paths
         run: |
           echo '🔧 Fixing absolute paths for GitHub Pages...'
-          bash ../deploy-page-repo/.github/scripts/fix-paths.sh
+          bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.sh"
           echo '✅ Paths fixed successfully'
       - name: Configure git
         run: |
