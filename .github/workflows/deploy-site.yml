@@ -50,6 +50,11 @@ jobs:
           echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
           echo "artifact_name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
           echo '✅ Inputs validated successfully'
+      - name: Checkout Deploy-page (for scripts)
+        uses: actions/checkout@v4
+        with:
+          path: deploy-page-repo
+          fetch-depth: 1
       - name: Download artifact from web-crawler
         id: download
         uses: dawidd6/action-download-artifact@v11
@@ -109,10 +114,7 @@ jobs:
         id: fix_paths
         run: |
           echo '🔧 Fixing absolute paths for GitHub Pages...'
-          cp ../../../.github/scripts/fix-paths.sh ./fix-paths-temp.sh
-          chmod +x ./fix-paths-temp.sh
-          bash ./fix-paths-temp.sh
-          rm ./fix-paths-temp.sh
+          bash ../deploy-page-repo/.github/scripts/fix-paths.sh
           echo '✅ Paths fixed successfully'
       - name: Configure git
         run: |
