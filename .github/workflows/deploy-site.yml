@@ -168,6 +168,8 @@ jobs:
       - name: Fix paths for GitHub Pages
         id: fix_paths
         working-directory: target-repo
+        env:
+          BASE_HREF: ${{ steps.validate.outputs.base_href }}
         run: |
           set -e
           echo '🔧 Fixing paths for GitHub Pages...'
@@ -178,8 +180,7 @@ jobs:
             exit 1
           fi
           
-          # Pass BASE_HREF explicitly as environment variable
-          BASE_HREF="${{ steps.validate.outputs.base_href }}" bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.sh" || {
+          bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.sh" || {
             echo '❌ Path fixing script failed'
             exit 1
           }
