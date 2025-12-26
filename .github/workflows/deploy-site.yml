@@ -20,11 +20,9 @@ on:
         required: false
         default: 'chore: deploy website'
         type: string
-
 permissions:
   contents: read
   actions: read
-
 jobs:
   deploy:
     name: Deploy Website to Target Repository
@@ -111,7 +109,10 @@ jobs:
         id: fix_paths
         run: |
           echo '🔧 Fixing absolute paths for GitHub Pages...'
-          bash .github/scripts/fix-paths.sh
+          cp ../../../.github/scripts/fix-paths.sh ./fix-paths-temp.sh
+          chmod +x ./fix-paths-temp.sh
+          bash ./fix-paths-temp.sh
+          rm ./fix-paths-temp.sh
           echo '✅ Paths fixed successfully'
       - name: Configure git
         run: |
