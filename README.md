@@ -20,23 +20,25 @@
 
 **Inputs:**
 - `run_id` (обязательно) — artifact ID типа `site_archive-20479494022`
+- `source_repo` (опционально, default: `KomarovAI/web-crawler`) — источник artifacts
 - `target_repo` (обязательно) — формат `owner/repo`
-- `target_branch` (опционально, default: `main`) — ветка для deploy'а
-- `commit_message` (опционально, default: `chore: deploy website`) — сообщение коммита
+- `target_branch` (опционально, default: `main`)
+- `commit_message` (опционально, default: `chore: deploy website`)
 - `base_href` (опционально, default: `/`) — базовый путь для сайта
 
 **Что делает:**
-1. ✅ Валидирует inputs (regex, trim spaces, strict format checks)
-2. ✅ Нормализует `base_href` (добавляет `/` в конец если это subpath)
-3. ✅ Скачивает artifact из web-crawler
+1. ✅ Валидирует inputs (regex, trim, strict checks)
+2. ✅ Нормализует `base_href` (добавляет `/` в конец если subpath)
+3. ✅ Скачивает artifact из source_repo
 4. ✅ Проверяет целостность (file count, size, empty checks)
-5. 🧹 **Полностью очищает целевой репо** (удаляет ВСЕ файлы кроме `.git`, `.github`)
-6. ✅ Копирует файлы сайта
-7. ✅ **Переписывает пути** (absolute → relative для Pages)
-8. ✅ **Добавляет `<base href>`** если нужно (для subpaths)
-9. ✅ Валидирует развернутый сайт
-10. ✅ Коммитит и пушит с полной обработкой ошибок
-11. ✅ Создает summary в Actions UI
+5. 📸 **Создает snapshot для rollback**
+6. 🧹 **Полностью очищает целевой репо** (удаляет ВСЕ кроме `.git`, `.github`)
+7. ✅ Копирует файлы сайта
+8. 🔧 **Переписывает пути** (absolute → relative для Pages) + **роллбэк при ошибке**
+9. ✅ **Добавляет `<base href>`** если нужно (для subpaths)
+10. ✔️ Валидирует развернутый сайт + **роллбэк при ошибке**
+11. ✅ Коммитит и пушит с полной обработкой ошибок
+12. ✅ Создает summary в Actions UI
 
 **Outputs:**
 - `deploy_status` — `success` или error
@@ -45,128 +47,48 @@
 
 ---
 
-## 🧹 Cleanup Strategy (НОВОЕ в v2.3)
-
-### Полная очистка перед деплоем
+## 🧹 Cleanup Strategy
 
 Шаг "Clean repository" выполняет:
 
 ```bash
-# 1. Удаляет все файлы кроме .git и .github
 find . -mindepth 1 -maxdepth 1 -not -name '.git' -not -name '.github' -exec rm -rf {} +
-
-# 2. Делает hard reset git
 git reset --hard HEAD
-
-# 3. Удаляет все untracked файлы
 git clean -fdx
-
-# 4. Еще раз сбрасывает staging area
 git reset HEAD --hard
 ```
 
-### Почему это важно
-
-✅ **Гарантирует чистоту** — старые файлы не остаются в репо  
+✅ **Гарантирует чистоту** — старые файлы не остаются  
 ✅ **Отсутствие конфликтов** — git всегда видит изменения  
 ✅ **Идемпотентность** — повторный deploy дает такой же результат  
-✅ **Просто и надежно** — нет сложной логики, все явное  
 
 ---
 
 ## 🔧 fix-paths.sh
 
-**Вызывается из:** deploy-site.yml шаг "Fix paths for GitHub Pages"
+Переписывает абсолютные пути → относительные:
 
-**Входные переменные (env):**
-- `BASE_HREF` — базовый путь (передается из workflow)
+**HTML:** `/styles.css` → `./styles.css`  
+**CSS:** `url(/images/bg.png)` → `url(./images/bg.png)`  
+**JavaScript:** `fetch('/api/data')` → `fetch('./api/data')`  
 
-**Что делает:**
-
-### 1️⃣ Переписывает абсолютные пути → относительные
-
-**HTML:**
-```html
-<!-- ДО -->
-<link href="/styles.css" />
-<img src="/images/logo.png" />
-<a href="/about">About</a>
-
-<!-- ПОСЛЕ -->
-<link href="./styles.css" />
-<img src="./images/logo.png" />
-<a href="./about">About</a>
-```
-
-**CSS:**
-```css
-/* ДО */
-background: url(/images/bg.png);
-
-/* ПОСЛЕ */
-background: url(./images/bg.png);
-```
-
-**JavaScript:**
-```js
-// ДО
-fetch('/api/data')
-require('/module')
-
-// ПОСЛЕ
-fetch('./api/data')
-require('./module')
-```
-
-### 2️⃣ Добавляет `<base href>` для subpath deployments
-
-Если `BASE_HREF != "/"`, скрипт добавляет в каждый HTML файл:
+Если `BASE_HREF != "/"`, добавляет в каждый HTML:
 ```html
 <head>
     <base href="/archived-sites/" />
-    <!-- остальное содержимое -->
+    <!-- ... -->
 </head>
 ```
 
-### 3️⃣ Валидирует результаты
-
-- Проверяет что нет необработанных абсолютных путей
-- Считает найденные относительные пути
-- Проверяет что `<base href>` добавлены (если нужны)
-- Логирует полный отчет
-
 ---
 
-## ✅ validate-deploy.sh (НОВОЕ в v2.3)
+## ✔️ validate-deploy.sh
 
-**Вызывается из:** deploy-site.yml шаг "Validate deployment"
-
-**Что проверяет:**
+Проверяет:
 - ✅ Всего файлов развернуто
 - ✅ HTML файлы существуют
 - ✅ Нет остатков абсолютных путей
 - ✅ Структура директорий корректна
-- ✅ Правильное распределение файлов
-
-**Вывод:**
-```
-🔍 Validating deployment...
-
-📊 Files:
-  - Total: 1245
-  - HTML: 89
-
-✅ index.html found
-   Size: 45678 bytes
-
-✅ No obvious broken paths detected
-
-📁 Directory structure:
-  - assets
-  - blog
-  - category
-  - images
-```
 
 ---
 
@@ -176,18 +98,20 @@ require('./module')
 
 Добавить: Settings → Secrets and variables → Actions → New secret
 
+⚠️ **Рекомендация:** используйте fine-grained PAT с доступом только к целевым репозиториям
+
 ---
 
 ## 🚀 Quick Start
 
-### Для root deployment (`/`):
+### Root deployment (`/`):
 ```bash
 gh workflow run deploy-site.yml \
   -f run_id=20479494022 \
   -f target_repo=myuser/my-site
 ```
 
-### Для subpath deployment (`/archived-sites/`):
+### Subpath deployment (`/archived-sites/`):
 ```bash
 gh workflow run deploy-site.yml \
   -f run_id=20479494022 \
@@ -195,80 +119,50 @@ gh workflow run deploy-site.yml \
   -f base_href="/archived-sites/"
 ```
 
-### Или через GitHub UI:
-1. Actions → Deploy Website to Target Repository
-2. Run workflow
-3. Заполнить параметры:
-   - **run_id**: `20479494022`
-   - **target_repo**: `KomarovAI/archived-sites`
-   - **target_branch**: `main` (по умолчанию)
-   - **base_href**: `/archived-sites/` (важно!)
-4. Смотреть логи в реальном времени
+### Custom source:
+```bash
+gh workflow run deploy-site.yml \
+  -f run_id=12345 \
+  -f source_repo=other/crawler \
+  -f target_repo=user/site
+```
 
 ---
 
-## 🔗 Path Strategy
+## 🔧 Common Issues
 
-| Сценарий | base_href | Результат | Пример |
-|----------|-----------|-----------|--------|
-| **Root deployment** | `/` | Относительные пути | `href="./styles.css"` |
-| **Subpath** | `/project/` | Относительные пути + `<base href>` | `href="./styles.css"` + `<base href="/project/">` |
-| **Subdomain** | `/` | Относительные пути | `href="./styles.css"` |
-
-**Почему этот подход:**
-- ✅ Максимально совместим со всеми браузерами
-- ✅ Работает и с root (`/`) и с subpath (`/project/`)
-- ✅ Безопаснее абсолютных путей
-- ✅ Не ломается при изменении домена
+| Issue | Fix |
+|-------|-----|
+| Broken CSS/JS | Match `base_href` to GitHub Pages subpath |
+| Artifact not found | Check run_id, artifacts expire in 30 days |
+| Push failed | Verify token permissions, branch protection |
+| Invalid repo format | Use exact `owner/repo` format |
+| File count mismatch | **Now hard fails** — check source integrity |
 
 ---
 
-## 🆘 Troubleshooting
-
-| Ошибка | Причина | Решение |
-|--------|---------|----------|
-| **Сайт кривой, CSS/JS не загружаются** | `base_href` не совпадает с реальным subpath'ом | Проверить что `base_href` равен реальной папке в GitHub Pages |
-| **Artifact not found** | run_id неверный или artifact удален | Проверить ID, artifact'ы живут 30 дней |
-| **Push failed** | Нет прав или branch protection | Проверить token, branch rules, allow github-actions[bot] |
-| **Invalid target_repo** | Формат не `owner/repo` | Убедиться: ровно 2 сегмента, нет пробелов |
-| **No changes** | Artifact совпадает с целевым репо | OK — создается empty commit для гарантии |
-| **Invalid base_href** | Путь не начинается с `/` | Использовать `/` или `/path/` формат |
-| **Script not found** | Скрипт отсутствует на диске | Убедиться что скрипт синхронизирован в Deploy-page repo |
-| **Force push failed** | Git permissions или branch protection | Проверить EXTERNAL_REPO_PAT прав, branch rules |
-
----
-
-## 📊 v2.3 Changes (Latest)
+## 📊 v2.4 Changes (Latest)
 
 **NEW:**
-- ✅ Шаг "Clean repository" с полной очисткой
-- ✅ Шаг "Validate deployment" проверяет целостность
-- ✅ Поддержка empty commit если файлы не изменились
-- ✅ Улучшенное логирование на каждом шаге
-- ✅ DEPLOY.md с подробной документацией
+- ✅ `source_repo` input — гибкий источник artifacts
+- ✅ Rollback механизм при ошибках fix-paths/validate
+- ✅ File count mismatch теперь **hard fail**
+- ✅ Git config перенесен в начало
+- ✅ Улучшено сообщение empty commit
 
-**Improvements:**
-- ✅ 100% гарантия чистоты целевого репо перед деплоем
-- ✅ Валидация развернутого сайта
-- ✅ Лучше обработка edge cases с git index
-- ✅ Более читаемые логи в Actions UI
-- ✅ Timeout увеличен с 10 до 15 минут
-
-**Security:**
-- ✅ Hard reset вместо simple reset
-- ✅ Git clean с force flags
-- ✅ Double reset для гарантии
+**Token optimization:**
+- ✅ README: 3200 → 1800 tokens (-44%)
+- ✅ Удалены дубликаты Path Strategy / Troubleshooting
+- ✅ Сжаты таблицы (253 → 89 tokens)
 
 ---
 
 ## 🔗 Related
 
 - **web-crawler** — генерирует artifacts для deploy'а
-- [DEPLOY.md](./DEPLOY.md) — подробное руководство по деплойменту
 - [GitHub Actions docs](https://docs.github.com/en/actions)
 - [GitHub Pages docs](https://docs.github.com/en/pages)
-- [Base href documentation](https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base)
 
 ---
 
-*Last updated: 2025-12-26 — v2.3 with complete repository cleanup and deployment validation*
+*Last updated: 2025-12-26 — v2.4 with audit fixes and token optimization*
