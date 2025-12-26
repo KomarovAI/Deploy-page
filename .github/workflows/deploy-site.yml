@@ -137,33 +137,54 @@ jobs:
           fetch-depth: 1
           path: target-repo
       
-      - name: Clear and redeploy
-        id: redeploy
+      - name: Clear repository content
+        id: clear
         working-directory: target-repo
         run: |
-          echo '🧹 Clearing repository (force redeploy mode)...'
+          echo '🧹 Clearing old content...'
           
-          # Remove all tracked files
-          git rm -r --cached . 2>/dev/null || true
+          # Remove all content except .git and .github
+          find . -mindepth 1 -maxdepth 1 \
+            -not -name '.git' \
+            -not -name '.github' \
+            -exec rm -rf {} + 2>/dev/null || true
           
-          # Remove all content files (except .git)
-          find . -mindepth 1 -maxdepth 1 -not -name '.git' -not -name '.github' -exec rm -rf {} + 2>/dev/null || true
+          # Also remove from git staging
+          git reset HEAD -- . 2>/dev/null || true
           
-          echo '✅ Repository cleared'
+          echo '✅ Old content cleared'
       
-      - name: Deploy website
+      - name: Copy website files
         id: deploy
-        working-directory: target-repo
         run: |
-          echo '📦 Deploying website...'
-          if ! cp -r "$GITHUB_WORKSPACE/site_content"/* . 2>/dev/null; then
-            echo '❌ Failed to copy website files'
+          echo '📦 Copying website files...'
+          
+          # Verify source exists
+          if [ ! -d "$GITHUB_WORKSPACE/site_content" ]; then
+            echo '❌ Source directory not found'
             exit 1
           fi
-          FILE_COUNT=$(find . -mindepth 1 -type f | wc -l)
-          echo "deployed_files=$FILE_COUNT" >> $GITHUB_OUTPUT
-          echo '✅ Website deployed'
-          echo "   Files: $FILE_COUNT"
+          
+          # Count files to copy
+          SOURCE_FILES=$(find "$GITHUB_WORKSPACE/site_content" -type f | wc -l)
+          echo "Source files: $SOURCE_FILES"
+          
+          # Copy all content
+          cp -r "$GITHUB_WORKSPACE/site_content"/* "$GITHUB_WORKSPACE/target-repo/" || {
+            echo '❌ Failed to copy files'
+            exit 1
+          }
+          
+          # Verify copy
+          DEST_FILES=$(find "$GITHUB_WORKSPACE/target-repo" -mindepth 1 -type f | wc -l)
+          echo "Deployed files: $DEST_FILES"
+          
+          if [ "$SOURCE_FILES" -ne "$DEST_FILES" ]; then
+            echo "⚠️  Warning: File count mismatch (source: $SOURCE_FILES, dest: $DEST_FILES)"
+          fi
+          
+          echo "deployed_files=$DEST_FILES" >> $GITHUB_OUTPUT
+          echo '✅ Files copied successfully'
       
       - name: Fix paths for GitHub Pages
         id: fix_paths
@@ -201,15 +222,25 @@ jobs:
         run: |
           echo '📝 Creating commit...'
           git add -A
-          git commit --allow-empty -m "$COMMIT_MSG" || true
           
-          echo '🚀 Force pushing to $TARGET_BRANCH...'
+          # Check if there's anything to commit
+          if git diff-index --quiet HEAD --; then
+            echo '⚠️  No changes to commit (working tree clean)'
+          else
+            git commit -m "$COMMIT_MSG" || {
+              echo '❌ Commit failed!'
+              exit 1
+            }
+          fi
+          
+          echo '🚀 Force pushing to '"$TARGET_BRANCH"'...'
           if ! git push --force origin "$TARGET_BRANCH"; then
             echo '❌ Force push failed!'
             exit 1
           fi
-          echo "status=committed" >> $GITHUB_OUTPUT
+          
           COMMIT_SHA=$(git rev-parse HEAD)
+          echo "status=committed" >> $GITHUB_OUTPUT
           echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
           echo '✅ Force push successful'
       
