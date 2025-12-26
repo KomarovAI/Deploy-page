@@ -36,12 +36,12 @@ jobs:
           EOF
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: 
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@754b35f32a0f3b39de40f060654fc5b36684dadf
         with:
-          path: _site
+          actions/deploy-pages@9dbe3b018cde3674dde74a2e54c000da5ecb799e
 
   deploy:
     runs-on: ubuntu-latest
@@ -52,4 +52,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@9dbe3b018cde3674dde74a2e54c000da5ecb799e
