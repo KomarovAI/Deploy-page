@@ -155,25 +155,27 @@ jobs:
           echo "snapshot_sha=$SNAPSHOT_SHA" >> $GITHUB_OUTPUT
           echo "📸 Snapshot created: $SNAPSHOT_SHA"
       
-      - name: Clean repository
+      - name: Clean repository (FULL WIPE)
         id: clean
         working-directory: target-repo
         run: |
-          echo '🧹 Cleaning repository...'
+          echo '🧹 FULL REPOSITORY CLEAN...'
           
-          # Check if repo is empty (first deploy)
-          if [ -z "$(git ls-files)" ]; then
-            echo '✓ Empty repository, skipping clean'
-            exit 0
+          # Remove ALL tracked files (except .github)
+          git ls-files | grep -v '^\.github/' | xargs -r git rm -rf --
+          
+          # Remove ALL untracked files/dirs (except .git)
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name '.github' -exec rm -rf {} +
+          
+          # Verify cleanup
+          REMAINING=$(git ls-files | grep -v '^\.github/' | wc -l)
+          if [ "$REMAINING" -gt 0 ]; then
+            echo "❌ Cleanup failed: $REMAINING files remaining"
+            git ls-files | grep -v '^\.github/'
+            exit 1
           fi
           
-          # Remove all tracked files
-          git rm -rf . --ignore-unmatch 2>/dev/null || true
-          
-          # Remove untracked files/dirs (except .git and .github)
-          git clean -fdx 2>/dev/null || true
-          
-          echo '✅ Repository cleaned'
+          echo '✅ Repository fully cleaned (except .github/)'
       
       - name: Copy website files
         id: deploy
