@@ -160,10 +160,19 @@ jobs:
         working-directory: target-repo
         run: |
           echo '🧹 Cleaning repository...'
-          find . -mindepth 1 -maxdepth 1 -not -name '.git' -not -name '.github' -exec rm -rf {} + 2>/dev/null || true
-          git reset --hard HEAD 2>/dev/null || true
+          
+          # Check if repo is empty (first deploy)
+          if [ -z "$(git ls-files)" ]; then
+            echo '✓ Empty repository, skipping clean'
+            exit 0
+          fi
+          
+          # Remove all tracked files
+          git rm -rf . --ignore-unmatch 2>/dev/null || true
+          
+          # Remove untracked files/dirs (except .git and .github)
           git clean -fdx 2>/dev/null || true
-          git reset HEAD --hard 2>/dev/null || true
+          
           echo '✅ Repository cleaned'
       
       - name: Copy website files
