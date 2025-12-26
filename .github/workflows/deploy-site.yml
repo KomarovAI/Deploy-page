@@ -257,21 +257,20 @@ jobs:
         run: |
           echo '📝 Staging and committing files...'
           
+          # Force add ALL files (including previously deleted)
           git add -A --force
           
-          if ! git diff-index --quiet HEAD --; then
-            echo '✅ Changes detected, creating commit...'
-            git commit -m "$COMMIT_MSG" -m "Deploy: $COMMIT_MSG at $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || {
-              echo '❌ Commit failed'
-              exit 1
-            }
-          else
-            echo '✓ No changes detected - repository already up-to-date'
-            git commit --allow-empty -m "$COMMIT_MSG" -m "Timestamp: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || {
-              echo '❌ Empty commit failed'
-              exit 1
-            }
-          fi
+          # Show what will be committed
+          echo "📋 Changes to commit:"
+          git status --short
+          
+          # Always create a commit (files were cleaned, then copied)
+          echo '✅ Creating commit...'
+          git commit -m "$COMMIT_MSG" -m "Deploy: $COMMIT_MSG at $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || {
+            echo '❌ Commit failed'
+            git status
+            exit 1
+          }
           
           COMMIT_SHA=$(git rev-parse HEAD)
           echo "status=success" >> $GITHUB_OUTPUT
