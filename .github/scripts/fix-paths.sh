@@ -90,9 +90,9 @@ find . -type f -name "*.js" 2>/dev/null | while read file; do
   sed -i "s|from '/\([^']*\)'|from './\1'|g" "$file"
   sed -i 's|from "/\([^"]*\)"|from "./\1"|g' "$file"
   
-  # Fix XMLHttpRequest and similar
-  sed -i "s|open('[A-Z]*', '/\([^']*\)'"|open('GET', './\1'|g" "$file"
-  sed -i 's|open("[A-Z]*", "/\([^"]*\)"|open("GET", "./\1"|g' "$file"
+  # Fix XMLHttpRequest paths: '/path' → './path'
+  sed -i "s|'/\([^']*\)'|'./\1'|g" "$file"
+  sed -i 's|"/\([^"]*\)"|"./\1"|g' "$file"
   
   AFTER=$(wc -c < "$file")
   if [ "$BEFORE" != "$AFTER" ]; then
