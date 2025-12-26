@@ -130,9 +130,11 @@ jobs:
           token: ${{ secrets.EXTERNAL_REPO_PAT }}
           ref: ${{ github.event.inputs.target_branch }}
           fetch-depth: 1
+          path: target-repo
       
       - name: Wipe repository
         id: wipe
+        working-directory: target-repo
         run: |
           echo '🧹 Clearing target repository...'
           PRESERVE_FILES=(".git" ".github" ".gitignore" "README.md" "LICENSE")
@@ -157,10 +159,13 @@ jobs:
       
       - name: Deploy website
         id: deploy
+        working-directory: target-repo
         run: |
           echo '📦 Deploying website...'
-          if ! cp -r ../site_content/* . 2>/dev/null; then
+          if ! cp -r "$GITHUB_WORKSPACE/site_content"/* . 2>/dev/null; then
             echo '❌ Failed to copy website files'
+            echo '📁 Source dir check:'
+            ls -R "$GITHUB_WORKSPACE/site_content" || echo 'site_content not found'
             exit 1
           fi
           FILE_COUNT=$(find . -mindepth 1 -type f | wc -l)
@@ -170,6 +175,7 @@ jobs:
       
       - name: Fix paths for GitHub Pages
         id: fix_paths
+        working-directory: target-repo
         env:
           BASE_HREF: ${{ steps.validate.outputs.base_href }}
         run: |
@@ -195,12 +201,14 @@ jobs:
           echo '✅ Paths fixed successfully'
       
       - name: Configure git
+        working-directory: target-repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
       
       - name: Commit and push
         id: commit
+        working-directory: target-repo
         env:
           COMMIT_MSG: ${{ github.event.inputs.commit_message }}
           TARGET_BRANCH: ${{ github.event.inputs.target_branch }}
