@@ -203,7 +203,7 @@ jobs:
         run: |
           echo '📝 Creating commit...'
           git add -A
-          git commit -m "$COMMIT_MSG" || { echo '❌ Commit failed'; exit 1; }
+          git commit --allow-empty -m "$COMMIT_MSG" || { echo '❌ Commit failed'; exit 1; }
           
           echo '🚀 Force pushing to $TARGET_BRANCH...'
           if ! git push --force origin "$TARGET_BRANCH"; then
