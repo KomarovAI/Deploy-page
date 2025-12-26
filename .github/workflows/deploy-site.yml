@@ -192,7 +192,8 @@ jobs:
           if [ "$BASE_HREF" != "/" ]; then
             find . -type f -name "*.html" | while read file; do
               if ! grep -q "<base href" "$file" 2>/dev/null; then
-                sed -i "1a\    <base href=\"$BASE_HREF\" />" "$file"
+                sed -i "1a\    <base href=\"$BASE_HREF\" />
+" "$file"
               fi
             done
             echo "   Base href set to: $BASE_HREF"
