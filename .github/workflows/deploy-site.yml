@@ -155,13 +155,13 @@ jobs:
           echo "snapshot_sha=$SNAPSHOT_SHA" >> $GITHUB_OUTPUT
           echo "📸 Snapshot created: $SNAPSHOT_SHA"
       
-      - name: Clean repository (FULL WIPE)
+      - name: Clean repository and commit deletion
         id: clean
         working-directory: target-repo
         run: |
           echo '🧹 FULL REPOSITORY CLEAN...'
           
-          # Remove ALL tracked files (except .github) - handle errors per file
+          # Remove ALL tracked files (except .github)
           git ls-files | grep -v '^\.github/' | while read -r file; do
             git rm -rf -- "$file" 2>/dev/null || true
           done
@@ -176,6 +176,15 @@ jobs:
             git ls-files | grep -v '^\.github/' | head -20
           else
             echo '✅ Repository fully cleaned (except .github/)'
+          fi
+          
+          # COMMIT THE DELETION - this is critical!
+          if ! git diff --cached --quiet; then
+            echo '🗑️  Committing file deletions...'
+            git commit -m "chore: clean repository before deploy" || true
+            echo '✅ Deletions committed'
+          else
+            echo 'ℹ️  No files to delete'
           fi
       
       - name: Copy website files
@@ -248,23 +257,23 @@ jobs:
           
           echo '✅ Validation completed'
       
-      - name: Stage files and commit
+      - name: Stage and commit new files
         id: commit
         working-directory: target-repo
         env:
           COMMIT_MSG: ${{ github.event.inputs.commit_message }}
           TARGET_BRANCH: ${{ github.event.inputs.target_branch }}
         run: |
-          echo '📝 Staging and committing files...'
+          echo '📝 Staging and committing new files...'
           
-          # Force add ALL files (including previously deleted)
-          git add -A --force
+          # Add all new files
+          git add -A
           
           # Show what will be committed
           echo "📋 Changes to commit:"
           git status --short
           
-          # Always create a commit (files were cleaned, then copied)
+          # Create commit
           echo '✅ Creating commit...'
           git commit -m "$COMMIT_MSG" -m "Deploy: $COMMIT_MSG at $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || {
             echo '❌ Commit failed'
