@@ -161,8 +161,10 @@ jobs:
         run: |
           echo '🧹 FULL REPOSITORY CLEAN...'
           
-          # Remove ALL tracked files (except .github) - continue on errors
-          git ls-files | grep -v '^\.github/' | xargs -r git rm -rf -- || true
+          # Remove ALL tracked files (except .github) - handle errors per file
+          git ls-files | grep -v '^\.github/' | while read -r file; do
+            git rm -rf -- "$file" 2>/dev/null || true
+          done
           
           # Remove ALL untracked files/dirs (except .git)
           find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name '.github' -exec rm -rf {} +
@@ -171,7 +173,7 @@ jobs:
           REMAINING=$(git ls-files | grep -v '^\.github/' | wc -l)
           if [ "$REMAINING" -gt 0 ]; then
             echo "⚠️  Warning: $REMAINING files remaining after cleanup"
-            git ls-files | grep -v '^\.github/'
+            git ls-files | grep -v '^\.github/' | head -20
           else
             echo '✅ Repository fully cleaned (except .github/)'
           fi
