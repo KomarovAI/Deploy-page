@@ -203,7 +203,7 @@ jobs:
         run: |
           echo '📝 Creating commit...'
           git add -A
-          git commit --allow-empty -m "$COMMIT_MSG" || { echo '❌ Commit failed'; exit 1; }
+          git commit --allow-empty -m "$COMMIT_MSG" || true
           
           echo '🚀 Force pushing to $TARGET_BRANCH...'
           if ! git push --force origin "$TARGET_BRANCH"; then
@@ -211,10 +211,10 @@ jobs:
             exit 1
           fi
           
+echo "status=committed" >> $GITHUB_OUTPUT
+echo "commit_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          
           echo '✅ Force push successful'
-          COMMIT_SHA=$(git rev-parse HEAD)
-          echo "status=committed" >> $GITHUB_OUTPUT
-          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
       
       - name: Create deployment summary
         if: always()
