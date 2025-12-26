@@ -58,7 +58,7 @@ jobs:
 
       - name: Download artifact
         id: download
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3b5a3ab82aa3cde19abf954996d8a08cf04a4d91
         with:
           name: ${{ steps.validate.outputs.artifact_name }}
           path: site_content
@@ -80,7 +80,7 @@ jobs:
           echo '✅ Artifact verified:' "$FILE_COUNT files | $DIR_SIZE"
 
       - name: Checkout target repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@2541b1294d2d7f6f05a9482eedb8fdc039d9f19d
         with:
           repository: ${{ steps.validate.outputs.target_repo }}
           token: ${{ secrets.EXTERNAL_REPO_PAT }}
