@@ -208,11 +208,9 @@ jobs:
             echo '❌ Force push failed!'
             exit 1
           fi
-              echo "status=committed" >> $GITHUB_OUTPUT
-    COMMIT_SHA=$(git rev-parse HEAD)
-    echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
-          
-          
+          echo "status=committed" >> $GITHUB_OUTPUT
+          COMMIT_SHA=$(git rev-parse HEAD)
+          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
           echo '✅ Force push successful'
       
       - name: Create deployment summary
