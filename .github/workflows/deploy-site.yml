@@ -107,7 +107,7 @@ jobs:
       
       - name: Download artifact
         id: download
-        uses: dawidd6/action-download-artifact@v11
+        uses: dawidd6/action-download-artifact@v12
         with:
           github_token: ${{ secrets.EXTERNAL_REPO_PAT }}
           repo: ${{ steps.validate.outputs.source_repo }}
