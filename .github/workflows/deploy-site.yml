@@ -100,7 +100,7 @@ jobs:
           echo "  - Base href: $BASE_HREF"
       
       - name: Checkout Deploy-page (for scripts)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: deploy-page-repo
           fetch-depth: 1
@@ -132,7 +132,7 @@ jobs:
           echo "   Files: $FILE_COUNT | Size: $DIR_SIZE"
       
       - name: Checkout target repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ steps.validate.outputs.target_repo }}
           token: ${{ secrets.EXTERNAL_REPO_PAT }}
