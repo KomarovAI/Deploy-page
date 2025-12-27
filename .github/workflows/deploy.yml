@@ -76,8 +76,8 @@ jobs:
             BASE_HREF="${BASE_HREF%/}/"  # Remove trailing slash, then add it
           fi
           
-          # Artifact name
-          ARTIFACT_NAME="site-archive-${RUN_ID}"
+          # Artifact name - FIXED: use underscore to match web-crawler output
+          ARTIFACT_NAME="site_archive-${RUN_ID}"
           echo "run_id=${RUN_ID}" >> $GITHUB_OUTPUT
           echo "source_repo=${SOURCE_REPO}" >> $GITHUB_OUTPUT
           echo "target_repo=${TARGET_REPO}" >> $GITHUB_OUTPUT
@@ -91,6 +91,7 @@ jobs:
           echo "- Target: ${TARGET_REPO}"
           echo "- Branch: ${{ github.event.inputs.target_branch }}"
           echo "- Base href: ${BASE_HREF}"
+          echo "- Artifact: ${ARTIFACT_NAME}"
 
       # Step 2: Checkout Deploy-page repo (contains scripts)
       - name: Checkout Deploy-page scripts
@@ -111,6 +112,7 @@ jobs:
 
       # Step 4: Verify artifact
       - name: Verify artifact
+        id: verify
         shell: bash
         run: |
           if [ ! -d "site-content" ] || [ -z "$(ls -A site-content 2>/dev/null)" ]; then
