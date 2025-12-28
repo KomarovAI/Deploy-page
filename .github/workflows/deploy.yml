@@ -6,6 +6,10 @@ on:
       run_id:
         description: 'Run ID from web-crawler workflow'
         required: true
+      artifact_name:
+        description: 'Artifact name (default: auto-detect from run_id)'
+        required: false
+        default: ''
       source_repo:
         description: 'Source repository (owner/repo)'
         required: false
@@ -76,8 +80,14 @@ jobs:
             BASE_HREF="${BASE_HREF%/}/"  # Remove trailing slash, then add it
           fi
           
-          # Artifact name - FIXED: use underscore to match web-crawler output
-          ARTIFACT_NAME="site_archive-${RUN_ID}"
+          # Artifact name - use input or pattern matching
+          ARTIFACT_NAME="${{ github.event.inputs.artifact_name }}"
+          if [ -z "$ARTIFACT_NAME" ]; then
+            # Auto-detect: try pattern *-${RUN_ID}
+            echo "⚠️ Artifact name not provided, will use pattern matching: *-${RUN_ID}"
+            ARTIFACT_NAME="*-${RUN_ID}"
+          fi
+          
           echo "run_id=${RUN_ID}" >> $GITHUB_OUTPUT
           echo "source_repo=${SOURCE_REPO}" >> $GITHUB_OUTPUT
           echo "target_repo=${TARGET_REPO}" >> $GITHUB_OUTPUT
@@ -109,6 +119,7 @@ jobs:
           run_id: ${{ steps.inputs.outputs.run_id }}
           name: ${{ steps.inputs.outputs.artifact_name }}
           path: site-content
+          search_artifacts: true
 
       # Step 4: Verify artifact
       - name: Verify artifact
