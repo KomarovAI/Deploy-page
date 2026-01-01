@@ -59,11 +59,16 @@ class StaticSiteFixer:
     def detect_directory_structure(self, filename: str) -> Optional[Tuple[str, str]]:
         """Detect directory structure from flattened filename.
         
+        CRITICAL FIX: Prevent hyphenated pages from being treated as nested.
+        
         Examples:
-            sectorsbars-pubs.html -> ('sectors', 'bars-pubs')
-            servicesdesign-sales-installation.html -> ('services', 'design-sales-installation')
-            categoryinsights.html -> ('category', 'insights')
-            newschristmas-opening.html -> ('news', 'christmas-opening')
+            ✅ sectorsbars-pubs.html → ('sectors', 'bars-pubs')
+            ✅ servicesdesign-sales-installation.html → ('services', 'design-sales-installation')
+            ✅ categoryinsights.html → ('category', 'insights')
+            ✅ newschristmas-opening.html → ('news', 'christmas-opening')
+            
+            ❌ news-insights.html → None (treated as standalone page, not news/-insights)
+            ❌ services-test.html → None (treated as standalone page, not services/-test)
         
         Returns:
             (directory, basename) tuple or None if no prefix matches
@@ -73,7 +78,11 @@ class StaticSiteFixer:
             if filename.startswith(prefix):
                 # Extract the rest after prefix
                 rest = filename[len(prefix):]
-                if rest:  # Make sure there's something after the prefix
+                
+                # CRITICAL CHECK: If rest starts with hyphen, this is NOT a nested page
+                # Example: "news-insights" has rest="-insights" → standalone page
+                # Example: "newschristmas" has rest="christmas" → nested page
+                if rest and not rest.startswith('-'):
                     return (prefix, rest)
         
         return None
@@ -87,6 +96,7 @@ class StaticSiteFixer:
         Transforms:
             sectorsbars-pubs.html -> sectors/bars-pubs/index.html
             servicesdesign-sales.html -> services/design-sales/index.html
+            news-insights.html -> news-insights/index.html (NOT news/-insights/)
         """
         print("\n📁 RESTRUCTURING PAGES:")
         print("━" * 80)
@@ -212,6 +222,7 @@ class StaticSiteFixer:
         Updates links like:
             sectorsbars-pubs.html -> sectors/bars-pubs/
             servicesdesign.html -> services/design/
+            news-insights.html -> news-insights/
         """
         if not self.restructure_map:
             return 0
