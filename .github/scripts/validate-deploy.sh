@@ -87,8 +87,21 @@ if [ "$HTML_FILES" -gt 0 ]; then
   BROKEN_SRC=$(grep -rh 'src="/[^/"]' . --include="*.html" 2>/dev/null | grep -v 'src="//' | wc -l || echo 0)
   
   # Check for double slashes (common bug after path fixing)
-  DOUBLE_SLASH_HREF=$(grep -rh 'href="[^"]*//[^/]' . --include="*.html" 2>/dev/null | wc -l || echo 0)
-  DOUBLE_SLASH_SRC=$(grep -rh 'src="[^"]*//[^/]' . --include="*.html" 2>/dev/null | wc -l || echo 0)
+  # FIXED: Exclude https://, http://, and protocol-relative URLs (//domain.com)
+  # Only catch buggy local paths like: href="path//file" or href="./path//file"
+  DOUBLE_SLASH_HREF=$(grep -rh 'href=' . --include="*.html" 2>/dev/null | \
+    grep -v 'href="https://' | \
+    grep -v 'href="http://' | \
+    grep -v 'href="//' | \
+    grep -F '//' | \
+    wc -l || echo 0)
+  
+  DOUBLE_SLASH_SRC=$(grep -rh 'src=' . --include="*.html" 2>/dev/null | \
+    grep -v 'src="https://' | \
+    grep -v 'src="http://' | \
+    grep -v 'src="//' | \
+    grep -F '//' | \
+    wc -l || echo 0)
   
   if [ "$BROKEN_HREF" -gt 0 ] || [ "$BROKEN_SRC" -gt 0 ]; then
     echo "${YELLOW}⚠️  Found root-relative paths (potential issues):${NC}"
@@ -121,7 +134,13 @@ if [ "$HTML_FILES" -gt 0 ]; then
     # Show examples
     if [ "$DOUBLE_SLASH_HREF" -gt 0 ]; then
       echo "   Examples:"
-      grep -rh 'href="[^"]*//[^/]' . --include="*.html" 2>/dev/null | head -3 | sed 's/^/     /'
+      grep -rh 'href=' . --include="*.html" 2>/dev/null | \
+        grep -v 'href="https://' | \
+        grep -v 'href="http://' | \
+        grep -v 'href="//' | \
+        grep -F '//' | \
+        head -3 | \
+        sed 's/^/     /'
     fi
     
     ERROR_COUNT=$((ERROR_COUNT + 1))
@@ -136,7 +155,12 @@ echo "${BLUE}🔗 Checking for problematic paths in CSS...${NC}"
 
 if [ "$CSS_FILES" -gt 0 ]; then
   BROKEN_CSS_URL=$(grep -rh 'url(/[^/)]' . --include="*.css" 2>/dev/null | wc -l || echo 0)
-  DOUBLE_SLASH_CSS=$(grep -rh 'url([^)]*//[^/)]' . --include="*.css" 2>/dev/null | wc -l || echo 0)
+  DOUBLE_SLASH_CSS=$(grep -rh 'url=' . --include="*.css" 2>/dev/null | \
+    grep -v 'url(https://' | \
+    grep -v 'url(http://' | \
+    grep -v 'url(//' | \
+    grep -F '//' | \
+    wc -l || echo 0)
   
   if [ "$BROKEN_CSS_URL" -gt 0 ]; then
     echo "${YELLOW}⚠️  Found root-relative paths in CSS:${NC}"
