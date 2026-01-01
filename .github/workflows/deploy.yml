@@ -22,6 +22,10 @@ on:
         description: 'Target branch'
         required: false
         default: 'main'
+      base_path:
+        description: 'Base path for GitHub Pages (e.g. /archived-sites)'
+        required: false
+        default: '/archived-sites'
 
 jobs:
   deploy:
@@ -34,41 +38,32 @@ jobs:
       deployed_files: ${{ steps.copy.outputs.deployedfiles }}
     
     steps:
-      # Step 1: Validate and normalize inputs
       - name: Validate inputs
         id: inputs
         shell: bash
         run: |
-          echo "Validating inputs..."
-          
-          # Run ID
           RUN_ID="${{ github.event.inputs.run_id }}"
           if ! [[ $RUN_ID =~ ^[0-9]+$ ]]; then
-            echo "Invalid run_id format: $RUN_ID"
+            echo "Invalid run_id: $RUN_ID"
             exit 1
           fi
           
-          # Source repository
           SOURCE_REPO="${{ github.event.inputs.source_repo }}"
           SOURCE_REPO=$(echo "$SOURCE_REPO" | xargs)
           if ! [[ $SOURCE_REPO =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]?/[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]?$ ]]; then
-            echo "Invalid source_repo format: $SOURCE_REPO"
+            echo "Invalid source_repo: $SOURCE_REPO"
             exit 1
           fi
           
-          # Target repository  
           TARGET_REPO="${{ github.event.inputs.target_repo }}"
           TARGET_REPO=$(echo "$TARGET_REPO" | xargs)
           if ! [[ $TARGET_REPO =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]?/[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]?$ ]]; then
-            echo "Invalid target_repo format: $TARGET_REPO"
+            echo "Invalid target_repo: $TARGET_REPO"
             exit 1
           fi
           
-          # Artifact name - use input or pattern matching
           ARTIFACT_NAME="${{ github.event.inputs.artifact_name }}"
           if [ -z "$ARTIFACT_NAME" ]; then
-            # Auto-detect: try pattern *-${RUN_ID}
-            echo "⚠️ Artifact name not provided, will use pattern matching: *-${RUN_ID}"
             ARTIFACT_NAME="*-${RUN_ID}"
           fi
           
@@ -76,16 +71,8 @@ jobs:
           echo "source_repo=${SOURCE_REPO}" >> $GITHUB_OUTPUT
           echo "target_repo=${TARGET_REPO}" >> $GITHUB_OUTPUT
           echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
-          echo "Inputs validated"
-          echo ""
-          echo "Parameters:"
-          echo "- Run ID: ${RUN_ID}"
-          echo "- Source: ${SOURCE_REPO}"
-          echo "- Target: ${TARGET_REPO}"
-          echo "- Branch: ${{ github.event.inputs.target_branch }}"
-          echo "- Artifact: ${ARTIFACT_NAME}"
+          echo "✅ Inputs validated"
 
-      # Step 2: Checkout Deploy-page repo
       - name: Checkout Deploy-page scripts
         uses: actions/checkout@v6
         with:
@@ -93,18 +80,13 @@ jobs:
           ref: main
           path: deploy-page-repo
           fetch-depth: 1
-          clean: true
-      
-      # Step 2.5: Install Python dependencies
-      - name: Install Python dependencies
-        run: |
-          echo "📦 Installing Python dependencies..."
-          python3 -m pip install --upgrade pip > /dev/null 2>&1
-          pip3 install beautifulsoup4 lxml > /dev/null 2>&1
-          echo "✅ Dependencies installed successfully"
 
-      # Step 3: Download artifact from source workflow
-      - name: Download site archive
+      - name: Install dependencies
+        run: |
+          python3 -m pip install -q --upgrade pip
+          pip3 install -q beautifulsoup4 lxml
+
+      - name: Download artifact
         uses: dawidd6/action-download-artifact@v12
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -114,24 +96,17 @@ jobs:
           path: site-content
           search_artifacts: true
 
-      # Step 4: Verify artifact
       - name: Verify artifact
         id: verify
-        shell: bash
         run: |
-          if [ ! -d "site-content" ] || [ -z "$(ls -A site-content 2>/dev/null)" ]; then
-            echo "Artifact not found or empty"
-            ls -R . || true
+          if [ ! -d "site-content" ] || [ -z "$(ls -A site-content)" ]; then
+            echo "❌ Artifact not found"
             exit 1
           fi
           FILE_COUNT=$(find site-content -type f | wc -l)
-          DIR_SIZE=$(du -sh site-content | cut -f1)
           echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
-          echo "dir_size=${DIR_SIZE}" >> $GITHUB_OUTPUT
-          echo "Artifact verified"
-          echo "Files: ${FILE_COUNT}, Size: ${DIR_SIZE}"
+          echo "✅ Artifact verified: ${FILE_COUNT} files"
 
-      # Step 5: Checkout target repository
       - name: Checkout target repository
         uses: actions/checkout@v6
         with:
@@ -141,189 +116,125 @@ jobs:
           fetch-depth: 0
           path: target-repo
 
-      # Step 6: Configure Git
       - name: Configure Git
         working-directory: target-repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          echo "Git configured"
 
-      # Step 7: Create snapshot for rollback
       - name: Create snapshot
         id: snapshot
         working-directory: target-repo
         run: |
           SNAPSHOT_SHA=$(git rev-parse HEAD)
           echo "snapshot_sha=${SNAPSHOT_SHA}" >> $GITHUB_OUTPUT
-          echo "Snapshot created: ${SNAPSHOT_SHA}"
+          echo "📸 Snapshot: ${SNAPSHOT_SHA}"
 
-      # Step 8: COMPLETE CLEANUP - Remove ALL files except .git and .github
-      - name: Clean repository
+      - name: ATOMIC CLEANUP via temp branch
         working-directory: target-repo
         run: |
-          echo "🧹 FULL REPOSITORY CLEANUP..."
+          echo "🧹 Creating clean deploy branch..."
+          git checkout -b deploy-temp
           
-          # Count files before cleanup
-          BEFORE_COUNT=$(find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
-          echo "Files before cleanup: $BEFORE_COUNT"
+          # Remove ALL except .git and .github
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name '.github' -exec rm -rf {} +
           
-          # CRITICAL: Remove EVERYTHING except .git and .github (filesystem level)
-          find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name '.github' -exec rm -rf {} + 2>/dev/null || true
-          
-          # Verify cleanup
-          AFTER_COUNT=$(find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
-          
-          if [ $AFTER_COUNT -eq 0 ]; then
-            echo "✅ Repository cleaned: $BEFORE_COUNT files removed"
-          else
-            echo "⚠️ Warning: $AFTER_COUNT files remaining after cleanup"
-            find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | head -10
+          # CRITICAL: Verify cleanup
+          REMAINING=$(find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
+          if [ $REMAINING -ne 0 ]; then
+            echo "❌ FATAL: $REMAINING files remain!"
+            find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*'
+            exit 1
           fi
+          echo "✅ Repository cleaned"
 
-      # Step 9: Copy website files TO ROOT
-      - name: Copy website files
+      - name: Copy new site
         id: copy
         working-directory: target-repo
         run: |
-          echo "📦 Copying website files..."
-          
-          if [ ! -d "$GITHUB_WORKSPACE/site-content" ]; then
-            echo "❌ Source directory not found"
-            exit 1
-          fi
-          
           SOURCE_FILES=$(find "$GITHUB_WORKSPACE/site-content" -type f | wc -l)
           
-          # Check if content is nested in a subdirectory
-          SUBDIRS=$(find "$GITHUB_WORKSPACE/site-content" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
-          
+          SUBDIRS=$(find "$GITHUB_WORKSPACE/site-content" -mindepth 1 -maxdepth 1 -type d | wc -l)
           if [ $SUBDIRS -eq 1 ]; then
-            # Single subdirectory found - extract its contents to root
-            SUBDIR=$(find "$GITHUB_WORKSPACE/site-content" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
-            SUBDIR_NAME=$(basename "$SUBDIR")
-            echo "  ↳ Nested structure detected: ${SUBDIR_NAME}"
-            cp -r "$SUBDIR"/* "$GITHUB_WORKSPACE/target-repo/" 2>/dev/null || {
-              echo "❌ Failed to copy nested files"
-              exit 1
-            }
+            SUBDIR=$(find "$GITHUB_WORKSPACE/site-content" -mindepth 1 -maxdepth 1 -type d | head -1)
+            cp -r "$SUBDIR"/* .
           else
-            # Multiple items or files at root - copy as-is
-            cp -r "$GITHUB_WORKSPACE/site-content"/* "$GITHUB_WORKSPACE/target-repo/" 2>/dev/null || {
-              echo "❌ Failed to copy files"
-              exit 1
-            }
+            cp -r "$GITHUB_WORKSPACE/site-content"/* .
           fi
           
-          # Verify file count matches
-          DEST_FILES=$(find "$GITHUB_WORKSPACE/target-repo" -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
-          
+          DEST_FILES=$(find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
           if [ $SOURCE_FILES -ne $DEST_FILES ]; then
-            echo "❌ File count mismatch (source: $SOURCE_FILES, dest: $DEST_FILES)"
+            echo "❌ File count mismatch"
             exit 1
           fi
           
           echo "deployed_files=${DEST_FILES}" >> $GITHUB_OUTPUT
           echo "✅ Copied ${DEST_FILES} files"
 
-      # Step 10: 🔥 RADICAL WORDPRESS DESTROYER 🔥
-      - name: Convert WordPress to clean static
+      - name: Convert WordPress
         working-directory: target-repo
+        env:
+          BASE_PATH: ${{ github.event.inputs.base_path }}
         run: |
-          set -e
-          echo "🔥 DESTROYING WORDPRESS, BUILDING CLEAN STATIC SITE..."
-          
-          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/wp-to-static.py" ]; then
-            echo "❌ wp-to-static.py script not found"
-            exit 1
-          fi
-          
-          # Execute WordPress destroyer
           python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/wp-to-static.py"
-          
-          echo ""
-          echo "✅ WordPress destroyed, static site built"
 
-      # Step 11: Validate deployment (optional, simple check)
-      - name: Validate deployment
+      - name: Validate
         working-directory: target-repo
         run: |
-          echo "✔️ Quick validation..."
-          
-          # Check if index.html exists
           if [ ! -f "index.html" ]; then
-            echo "❌ index.html not found!"
+            echo "❌ index.html missing!"
             exit 1
           fi
-          
           HTML_COUNT=$(find . -name '*.html' -type f | wc -l)
-          echo "✅ Found ${HTML_COUNT} HTML files"
-          
           if [ $HTML_COUNT -eq 0 ]; then
-            echo "❌ No HTML files found!"
+            echo "❌ No HTML files!"
             exit 1
           fi
+          echo "✅ Validation passed: ${HTML_COUNT} HTML files"
 
-      # Step 12: FORCE COMMIT - Always commit even if content identical
-      - name: Commit and push
+      - name: Atomic commit
         id: commit
         working-directory: target-repo
         run: |
-          echo "📤 Staging all changes..."
-          
-          # Stage ALL changes (additions, modifications, deletions)
           git add -A
           
-          # Count changes (if any)
           if git diff --cached --quiet; then
-            echo "ℹ️ No file changes detected (content identical to previous deploy)"
             CHANGED_FILES=0
           else
             CHANGED_FILES=$(git diff --cached --name-only | wc -l)
-            echo "Changes detected: ${CHANGED_FILES} files"
           fi
           
-          # ALWAYS COMMIT (even if empty) with --allow-empty flag
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          git commit --allow-empty -m "deploy: 🔥 WordPress destroyed, static site deployed (run ${{ steps.inputs.outputs.run_id }}) at ${TIMESTAMP}" --quiet
+          git commit --allow-empty -m "deploy: run ${{ steps.inputs.outputs.run_id }} at ${TIMESTAMP}"
           
-          # Push to remote
-          git push origin ${{ github.event.inputs.target_branch }} --quiet
+          # Merge to main
+          git checkout ${{ github.event.inputs.target_branch }}
+          git merge --ff-only deploy-temp
+          git branch -d deploy-temp
+          
+          git push origin ${{ github.event.inputs.target_branch }}
           
           COMMIT_SHA=$(git rev-parse HEAD)
-          SHORT_SHA=$(git rev-parse --short HEAD)
           echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
-          
-          if [ $CHANGED_FILES -eq 0 ]; then
-            echo "✅ Deployed: no changes, forced commit (${SHORT_SHA})"
-          else
-            echo "✅ Deployed: ${CHANGED_FILES} files changed (${SHORT_SHA})"
-          fi
+          echo "✅ Deployed: ${CHANGED_FILES} changes"
 
-      # Step 13: Deployment summary
-      - name: Deployment summary
+      - name: Rollback on failure
+        if: failure()
+        working-directory: target-repo
+        run: |
+          echo "⚠️ Rolling back to ${{ steps.snapshot.outputs.snapshot_sha }}"
+          git checkout ${{ github.event.inputs.target_branch }}
+          git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
+          git push origin ${{ github.event.inputs.target_branch }} --force
+
+      - name: Summary
         if: always()
         run: |
           echo "# Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
           if [ "${{ job.status }}" = "success" ]; then
-            echo "## ✅ Status: SUCCESS" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Details" >> $GITHUB_STEP_SUMMARY
-            echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
-            echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| Repository | ${{ steps.inputs.outputs.target_repo }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Branch | ${{ github.event.inputs.target_branch }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Commit | ${{ steps.commit.outputs.commit_sha }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Files | ${{ steps.copy.outputs.deployedfiles }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Size | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Conversion | 🔥 WordPress → Clean Static |" >> $GITHUB_STEP_SUMMARY
+            echo "## ✅ SUCCESS" >> $GITHUB_STEP_SUMMARY
+            echo "Commit: ${{ steps.commit.outputs.commit_sha }}" >> $GITHUB_STEP_SUMMARY
           else
-            echo "## ❌ Status: FAILED" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Rollback to: ${{ steps.snapshot.outputs.snapshot_sha }}" >> $GITHUB_STEP_SUMMARY
+            echo "## ❌ FAILED - Rolled back" >> $GITHUB_STEP_SUMMARY
           fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Deployed: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
