@@ -81,8 +81,9 @@ else
   echo "  Processing $HTML_COUNT HTML files..."
   echo ""
   
-  # JavaScript fix to inject
-  read -r -d '' JS_FIX << 'EOF' || true
+  # JavaScript fix to inject (stored in temp file for safe injection)
+  JS_FIX_FILE=$(mktemp)
+  cat > "$JS_FIX_FILE" << 'EOF'
 <!-- Static Site Navigation Fix -->
 <script>
 (function() {
@@ -146,14 +147,24 @@ EOF
     
     # Check if file has </body> tag
     if grep -q "</body>" "$file" 2>/dev/null; then
-      # Insert JS fix before </body>
-      sed -i "s|</body>|${JS_FIX}\n</body>|" "$file"
+      # Use perl for safe injection (handles special characters)
+      perl -0777 -i -pe "s|</body>|\$(cat $JS_FIX_FILE)\n</body>|" "$file" 2>/dev/null || {
+        # Fallback: use awk if perl fails
+        awk -v insert="$(cat "$JS_FIX_FILE")" '
+          /<\/body>/ { print insert }
+          { print }
+        ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+      }
+      
       echo "  ✓ $(basename "$file"): navigation fix injected"
       HTML_PATCHED=$((HTML_PATCHED + 1))
     else
       echo "  ⚠️  $(basename "$file"): no </body> tag found"
     fi
   done
+  
+  # Cleanup temp file
+  rm -f "$JS_FIX_FILE"
   
   echo ""
   echo "  📝 HTML files patched: $HTML_PATCHED / $HTML_COUNT"
