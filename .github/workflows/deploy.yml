@@ -103,12 +103,25 @@ jobs:
           echo "- Base href: ${BASE_HREF}"
           echo "- Artifact: ${ARTIFACT_NAME}"
 
-      # Step 2: Checkout Deploy-page repo (contains scripts)
+      # Step 2: Checkout Deploy-page repo (FORCE FRESH - NO CACHE)
       - name: Checkout Deploy-page scripts
         uses: actions/checkout@v6
         with:
+          repository: KomarovAI/Deploy-page
+          ref: main  # EXPLICITLY use main branch
           path: deploy-page-repo
           fetch-depth: 1
+          clean: true  # Force clean checkout
+      
+      # Step 2.1: Verify script versions (debugging)
+      - name: Verify script versions
+        run: |
+          echo "🔍 Verifying script versions..."
+          cd deploy-page-repo
+          echo "Current commit: $(git rev-parse HEAD)"
+          echo "Current commit short: $(git rev-parse --short HEAD)"
+          echo "fix-static-site.py modified: $(git log -1 --format=%ci .github/scripts/fix-static-site.py)"
+          echo ""
 
       # Step 2.5: Install Python dependencies
       - name: Install Python dependencies
@@ -255,11 +268,7 @@ jobs:
             exit 1
           fi
           
-          if ! python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.py" 2>&1 | grep -E "^(✅|❌|⚠️)"; then
-            echo "❌ Path fixing failed - rolling back"
-            git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
-            exit 1
-          fi
+          python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.py"
 
       # Step 10.5: Fix static site issues (WordPress exports)
       - name: Fix static site issues
@@ -271,11 +280,7 @@ jobs:
           if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py" ]; then
             echo "⚠️ fix-static-site.py not found, skipping"
           else
-            if ! python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py" 2>&1 | grep -E "^(✅|❌|⚠️)"; then
-              echo "❌ Static site fixing failed - rolling back"
-              git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
-              exit 1
-            fi
+            python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py"
           fi
 
       # Step 11: Validate deployment
@@ -289,11 +294,7 @@ jobs:
           if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py" ]; then
             echo "⚠️ validate-deploy.py not found, skipping"
           else
-            if ! python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py" 2>&1 | grep -E "^(✅|❌|⚠️)"; then
-              echo "❌ Validation failed - rolling back"
-              git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
-              exit 1
-            fi
+            python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py"
           fi
 
       # Step 12: Commit and push EVERYTHING in ONE commit
