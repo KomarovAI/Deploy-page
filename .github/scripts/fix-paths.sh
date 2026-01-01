@@ -1,235 +1,252 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env python3
+"""Fix paths for GitHub Pages deployment."""
 
-echo "🔧 Fixing paths for GitHub Pages..."
-
-# Read BASE_HREF from environment or default to /
-BASE_HREF="${BASE_HREF:=/}"
-echo "BASE_HREF: ${BASE_HREF}"
-
-# Normalize BASE_HREF (remove trailing slash for manipulation)
-BASE_HREF="${BASE_HREF%/}"
-
-# Find all HTML files
-HTML_FILES=$(find . -name "*.html" -type f ! -path '*/.git/*' ! -path '*/.github/*')
-HTML_COUNT=$(echo "$HTML_FILES" | grep -c '.' || echo 0)
-
-if [ "$HTML_COUNT" -eq 0 ]; then
-  echo "⚠️  No HTML files found, skipping path fixing"
-  exit 0
-fi
-
-echo "Processing $HTML_COUNT HTML files..."
-echo ""
-
-# Counter for tracking actual replacements
-TOTAL_REPLACEMENTS=0
-FILES_MODIFIED=0
-
-for file in $HTML_FILES; do
-  echo "  Processing: $file"
-  
-  # Track if file was modified
-  MODIFIED=0
-  
-  # Create backup for comparison
-  cp "$file" "$file.backup"
-  
-  # 1. Fix absolute URLs pointing to the original domain
-  # ONLY if they exist (idempotent check)
-  if grep -q 'https://www\.caterkitservices\.com/' "$file" 2>/dev/null; then
-    # href="https://www.caterkitservices.com/..." → href="./..."
-    sed -i 's|href="https://www\.caterkitservices\.com/|href="./|g' "$file"
-    sed -i "s|href='https://www\.caterkitservices\.com/|href='./|g" "$file"
-    
-    # src="https://www.caterkitservices.com/..." → src="./..."
-    sed -i 's|src="https://www\.caterkitservices\.com/|src="./|g' "$file"
-    sed -i "s|src='https://www\.caterkitservices\.com/|src='./|g" "$file"
-    
-    echo "    ✓ Fixed domain-absolute URLs"
-    MODIFIED=1
-  fi
-  
-  # 2. Fix root-relative paths based on BASE_HREF
-  if [ "$BASE_HREF" = "" ] || [ "$BASE_HREF" = "/" ]; then
-    # ROOT DEPLOYMENT: /path → ./path
-    # Only replace if NOT already relative (idempotent)
-    
-    # IMPROVED: Handle query strings and anchors
-    # href="/path?query" → href="./path?query"
-    # href="/path#anchor" → href="./path#anchor"
-    # href="/path?q=1#top" → href="./path?q=1#top"
-    
-    if grep -qE 'href="/[^/]' "$file" 2>/dev/null; then
-      # This regex preserves query strings and anchors
-      sed -i 's|href="/\([^"]*\)"|href="./\1"|g' "$file"
-      echo "    ✓ Fixed href=\"/...\" → href=\"./...\""
-      MODIFIED=1
-    fi
-    
-    if grep -qE "href='/[^/]" "$file" 2>/dev/null; then
-      sed -i "s|href='/\([^']*\)'|href='./\1'|g" "$file"
-      MODIFIED=1
-    fi
-    
-    # src="/path" → src="./path"
-    if grep -qE 'src="/[^/]' "$file" 2>/dev/null; then
-      sed -i 's|src="/\([^"]*\)"|src="./\1"|g' "$file"
-      echo "    ✓ Fixed src=\"/...\" → src=\"./...\""
-      MODIFIED=1
-    fi
-    
-    if grep -qE "src='/[^/]" "$file" 2>/dev/null; then
-      sed -i "s|src='/\([^']*\)'|src='./\1'|g" "$file"
-      MODIFIED=1
-    fi
-    
-    # url(/path) → url(./path)
-    if grep -qE 'url\(/[^/]' "$file" 2>/dev/null; then
-      sed -i 's|url(/\([^)]*\))|url(./\1)|g' "$file"
-      sed -i "s|url('/\([^']*\)')|url('./\1')|g" "$file"
-      sed -i 's|url("/\([^"]*\)")|url(\"./\1\")|g' "$file"
-      echo "    ✓ Fixed url(/...) → url(./...)"
-      MODIFIED=1
-    fi
-    
-  else
-    # SUBPATH DEPLOYMENT: /path → /base/path
-    
-    if grep -qE 'href="/[^/]' "$file" 2>/dev/null && ! grep -q "href=\"$BASE_HREF/" "$file" 2>/dev/null; then
-      sed -i "s|href=\"/\([^\"]*\)\"|href=\"$BASE_HREF/\1\"|g" "$file"
-      echo "    ✓ Prefixed href with BASE_HREF"
-      MODIFIED=1
-    fi
-    
-    if grep -qE "href='/[^/]" "$file" 2>/dev/null && ! grep -q "href='$BASE_HREF/" "$file" 2>/dev/null; then
-      sed -i "s|href='/\([^']*\)'|href='$BASE_HREF/\1'|g" "$file"
-      MODIFIED=1
-    fi
-    
-    if grep -qE 'src="/[^/]' "$file" 2>/dev/null && ! grep -q "src=\"$BASE_HREF/" "$file" 2>/dev/null; then
-      sed -i "s|src=\"/\([^\"]*\)\"|src=\"$BASE_HREF/\1\"|g" "$file"
-      echo "    ✓ Prefixed src with BASE_HREF"
-      MODIFIED=1
-    fi
-    
-    if grep -qE "src='/[^/]" "$file" 2>/dev/null && ! grep -q "src='$BASE_HREF/" "$file" 2>/dev/null; then
-      sed -i "s|src='/\([^']*\)'|src='$BASE_HREF/\1'|g" "$file"
-      MODIFIED=1
-    fi
-    
-    if grep -qE 'url\(/[^/]' "$file" 2>/dev/null && ! grep -q "url($BASE_HREF/" "$file" 2>/dev/null; then
-      sed -i "s|url(/\([^)]*\))|url($BASE_HREF/\1)|g" "$file"
-      sed -i "s|url('/\([^']*\)')|url('$BASE_HREF/\1')|g" "$file"
-      sed -i "s|url(\"/\([^\"]*\)\")|url(\"$BASE_HREF/\1\")|g" "$file"
-      echo "    ✓ Prefixed url(...) with BASE_HREF"
-      MODIFIED=1
-    fi
-  fi
-  
-  # 3. Add .html extension to internal page links (GitHub Pages fix)
-  # IMPROVED: Better handling of query strings and anchors
-  # Examples:
-  #   href="./services" → href="./services.html"
-  #   href="./services?tab=1" → href="./services.html?tab=1"
-  #   href="./services#about" → href="./services.html#about"
-  #   href="./services.html" → href="./services.html" (unchanged)
-  
-  # Create a temporary Python script for complex regex
-  python3 - "$file" <<'PYTHON_EOF'
+import os
 import sys
 import re
+from pathlib import Path
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
+from typing import Optional
 
-filename = sys.argv[1]
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    print("⚠️  BeautifulSoup4 not found, installing...")
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "beautifulsoup4", "lxml"])
+    from bs4 import BeautifulSoup
 
-with open(filename, 'r', encoding='utf-8', errors='ignore') as f:
-    content = f.read()
 
-# Pattern to add .html before query strings or anchors
-# Matches: href="path" or href="path?query" or href="path#anchor"
-# But NOT: href="path.ext" or href="http://" or href="#anchor"
-
-def add_html_extension(match):
-    quote = match.group(1)  # " or '
-    prefix = match.group(2) or ''  # Optional ./ or nothing
-    path = match.group(3)  # The actual path
-    suffix = match.group(4) or ''  # Optional ?query or #anchor
+class PathFixer:
+    """Fix paths for GitHub Pages compatibility."""
     
-    # Skip if path already has an extension
-    if '.' in path.split('/')[-1]:
-        return match.group(0)  # Return unchanged
+    def __init__(self, base_href: str = "/"):
+        self.base_href = base_href.rstrip("/")
+        self.files_modified = 0
+        self.total_changes = 0
+        
+    def should_add_html_extension(self, path: str) -> bool:
+        """Check if path needs .html extension."""
+        # Skip if already has extension
+        filename = path.split('/')[-1].split('?')[0].split('#')[0]
+        if '.' in filename:
+            return False
+        
+        # Skip if empty or special
+        if not path or path.startswith('http://') or path.startswith('https://') or path.startswith('//'):
+            return False
+        
+        # Skip anchors only
+        if path.startswith('#'):
+            return False
+        
+        return True
     
-    # Skip if it's just an anchor
-    if not path:
-        return match.group(0)
+    def fix_url(self, url: str, attr_type: str = "href") -> str:
+        """Fix a single URL."""
+        original_url = url
+        
+        # Parse URL
+        parsed = urlparse(url)
+        
+        # Fix domain-absolute URLs
+        if 'www.caterkitservices.com' in url:
+            url = url.replace('https://www.caterkitservices.com/', './')
+            url = url.replace('http://www.caterkitservices.com/', './')
+            parsed = urlparse(url)
+        
+        # Fix root-relative paths
+        if parsed.path.startswith('/') and not parsed.netloc:
+            if self.base_href == "" or self.base_href == "/":
+                # ROOT deployment: /path → ./path
+                path = './' + parsed.path.lstrip('/')
+            else:
+                # SUBPATH deployment: /path → /base/path
+                if not parsed.path.startswith(self.base_href + '/'):
+                    path = self.base_href + parsed.path
+                else:
+                    path = parsed.path
+            
+            url = urlunparse((
+                parsed.scheme,
+                parsed.netloc,
+                path,
+                parsed.params,
+                parsed.query,
+                parsed.fragment
+            ))
+            parsed = urlparse(url)
+        
+        # Add .html extension for page links
+        if attr_type == "href" and self.should_add_html_extension(parsed.path):
+            # Split path from query/fragment
+            path_parts = parsed.path.split('?', 1)
+            base_path = path_parts[0].split('#', 1)[0]
+            
+            if not base_path.endswith('.html'):
+                base_path += '.html'
+                
+                # Reconstruct URL
+                url = urlunparse((
+                    parsed.scheme,
+                    parsed.netloc,
+                    base_path,
+                    parsed.params,
+                    parsed.query,
+                    parsed.fragment
+                ))
+        
+        return url if url != original_url else original_url
     
-    # Skip external URLs
-    if path.startswith('http://') or path.startswith('https://') or path.startswith('//'):
-        return match.group(0)
+    def fix_css_urls(self, css_content: str) -> str:
+        """Fix url() in CSS."""
+        def replace_url(match):
+            url = match.group(1).strip('"\'')
+            fixed_url = self.fix_url(url, attr_type="src")
+            quote = '"' if '"' in match.group(0) else "'"
+            return f"url({quote}{fixed_url}{quote})"
+        
+        # Match url(...) with various quote styles
+        pattern = r'url\(["\']?([^"\')]+)["\']?\)'
+        return re.sub(pattern, replace_url, css_content)
     
-    # Add .html before query/anchor
-    return f'href={quote}{prefix}{path}.html{suffix}{quote}'
-
-# Match href="path" or href="path?query" or href="path#anchor"
-# Supports both " and '
-pattern = r'href=(["\'])((\./)?([a-zA-Z0-9/_-]+))(\?[^"\']*)?(#[^"\']*)?(\1)'
-
-def process_href(match):
-    quote = match.group(1)
-    prefix = match.group(2) or ''
-    path_part = match.group(4)
-    query = match.group(5) or ''
-    anchor = match.group(6) or ''
+    def process_html_file(self, file_path: Path) -> int:
+        """Process a single HTML file."""
+        try:
+            # Read file
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+            original_content = content
+            
+            # Parse HTML
+            soup = BeautifulSoup(content, "html.parser")
+            changes = 0
+            
+            # Fix href attributes
+            for tag in soup.find_all(attrs={"href": True}):
+                original_href = tag["href"]
+                fixed_href = self.fix_url(original_href, attr_type="href")
+                if fixed_href != original_href:
+                    tag["href"] = fixed_href
+                    changes += 1
+            
+            # Fix src attributes
+            for tag in soup.find_all(attrs={"src": True}):
+                original_src = tag["src"]
+                fixed_src = self.fix_url(original_src, attr_type="src")
+                if fixed_src != original_src:
+                    tag["src"] = fixed_src
+                    changes += 1
+            
+            # Fix CSS url() in <style> tags
+            for style_tag in soup.find_all("style"):
+                if style_tag.string:
+                    original_css = style_tag.string
+                    fixed_css = self.fix_css_urls(original_css)
+                    if fixed_css != original_css:
+                        style_tag.string.replace_with(fixed_css)
+                        changes += 1
+            
+            # Fix inline style attributes
+            for tag in soup.find_all(attrs={"style": True}):
+                original_style = tag["style"]
+                fixed_style = self.fix_css_urls(original_style)
+                if fixed_style != original_style:
+                    tag["style"] = fixed_style
+                    changes += 1
+            
+            # Write back if changed
+            if changes > 0:
+                new_content = str(soup)
+                file_path.write_text(new_content, encoding="utf-8")
+                print(f"  ✓ {file_path.name}: {changes} changes")
+                self.files_modified += 1
+                self.total_changes += changes
+            else:
+                print(f"  → {file_path.name}: no changes needed")
+            
+            return changes
+            
+        except Exception as e:
+            print(f"  ❌ {file_path.name}: ERROR - {e}")
+            return 0
     
-    # Skip if already has extension
-    if '.' in path_part.split('/')[-1]:
-        return match.group(0)
+    def process_css_file(self, file_path: Path) -> int:
+        """Process a single CSS file."""
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+            fixed_content = self.fix_css_urls(content)
+            
+            if fixed_content != content:
+                file_path.write_text(fixed_content, encoding="utf-8")
+                changes = content.count('url(') - fixed_content.count('url(') + 1
+                print(f"  ✓ {file_path.name}: {changes} url() fixed")
+                self.files_modified += 1
+                self.total_changes += changes
+                return changes
+            else:
+                print(f"  → {file_path.name}: no changes needed")
+                return 0
+                
+        except Exception as e:
+            print(f"  ❌ {file_path.name}: ERROR - {e}")
+            return 0
     
-    # Skip external/special
-    if not path_part or path_part.startswith('http'):
-        return match.group(0)
+    def run(self):
+        """Execute path fixing."""
+        print("🔧 Fixing paths for GitHub Pages...")
+        print(f"BASE_HREF: {self.base_href if self.base_href else '/'}")
+        print()
+        
+        cwd = Path.cwd()
+        
+        # Find HTML files
+        html_files = [
+            f for f in cwd.rglob("*.html")
+            if ".git" not in f.parts and ".github" not in f.parts
+        ]
+        
+        if not html_files:
+            print("⚠️  No HTML files found, skipping path fixing")
+            return 0
+        
+        print(f"Processing {len(html_files)} HTML files...\n")
+        
+        # Process HTML files
+        for html_file in html_files:
+            self.process_html_file(html_file)
+        
+        # Find and process CSS files
+        css_files = [
+            f for f in cwd.rglob("*.css")
+            if ".git" not in f.parts and ".github" not in f.parts
+        ]
+        
+        if css_files:
+            print(f"\nProcessing {len(css_files)} CSS files...\n")
+            for css_file in css_files:
+                self.process_css_file(css_file)
+        
+        # Print summary
+        print()
+        print("✅ Path fixing complete!")
+        print("━" * 32)
+        print(f"Total files scanned: {len(html_files) + len(css_files)}")
+        print(f"Files modified: {self.files_modified}")
+        print(f"Total changes: {self.total_changes}")
+        print("━" * 32)
+        print()
+        
+        if self.files_modified == 0:
+            print("ℹ️  All files were already correct - no changes needed")
+        else:
+            print(f"✨ Successfully updated {self.files_modified} file(s) for GitHub Pages")
+        
+        return 0
+
+
+if __name__ == "__main__":
+    # Read BASE_HREF from environment
+    base_href = os.environ.get("BASE_HREF", "/")
     
-    return f'href={quote}{prefix}{path_part}.html{query}{anchor}{quote}'
-
-content = re.sub(pattern, process_href, content)
-
-with open(filename, 'w', encoding='utf-8', errors='ignore') as f:
-    f.write(content)
-
-PYTHON_EOF
-  
-  if [ $? -eq 0 ]; then
-    echo "    ✓ Added .html extension to page links (Python)"
-    MODIFIED=1
-  fi
-  
-  # Compare with backup to count actual changes
-  if ! diff -q "$file" "$file.backup" > /dev/null 2>&1; then
-    CHANGE_COUNT=$(diff "$file" "$file.backup" | grep -c '^[<>]' || echo 0)
-    echo "    📝 $CHANGE_COUNT lines changed"
-    FILES_MODIFIED=$((FILES_MODIFIED + 1))
-    TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + CHANGE_COUNT))
-  else
-    echo "    → No changes needed (already correct)"
-  fi
-  
-  # Remove backup
-  rm -f "$file.backup"
-done
-
-echo ""
-echo "✅ Path fixing complete!"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Total files scanned: $HTML_COUNT"
-echo "Files modified: $FILES_MODIFIED"
-echo "Total line changes: $TOTAL_REPLACEMENTS"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-
-if [ $FILES_MODIFIED -eq 0 ]; then
-  echo "ℹ️  All files were already correct - no changes needed"
-else
-  echo "✨ Successfully updated $FILES_MODIFIED file(s) for GitHub Pages"
-fi
-
-exit 0
+    fixer = PathFixer(base_href=base_href)
+    sys.exit(fixer.run())
