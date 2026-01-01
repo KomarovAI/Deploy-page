@@ -5,6 +5,7 @@
 [![AI-First](https://img.shields.io/badge/AI-First%20Repository-blueviolet?style=for-the-badge&logo=openai)](https://github.com/KomarovAI/Deploy-page)
 [![Token-Efficient](https://img.shields.io/badge/Token-Efficient-green?style=for-the-badge)](https://github.com/KomarovAI/Deploy-page)
 [![Workflow-Only](https://img.shields.io/badge/Execution-Workflow%20Only-orange?style=for-the-badge&logo=github-actions)](https://github.com/KomarovAI/Deploy-page)
+[![Status](https://img.shields.io/badge/Status-Production%20Ready-success?style=for-the-badge)](https://github.com/KomarovAI/Deploy-page)
 
 **Automated static site deployment to GitHub Pages** through GitHub Actions workflow orchestration with artifact-based content delivery, intelligent path rewriting, and zero-downtime rollback mechanisms.
 
@@ -29,6 +30,7 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 - **Smart Path Rewriting** - Absolute → relative (GitHub Pages compatible)
 - **Query String Preservation** - `href="/page?q=1"` → `href="./page.html?q=1"`
 - **Anchor Preservation** - `href="/page#top"` → `href="./page.html#top"`
+- **Python-Based Processing** - Robust regex handling for complex patterns
 - **Idempotent Scripts** - Safe to run multiple times
 - **Automatic Rollback** - Git snapshot restoration on failure
 - **Soft/Strict Validation** - Choose between warnings or hard failures
@@ -68,6 +70,11 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 <script src="/project/app.js">
 ```
 
+**Technology:**
+- ✨ **Python-based** .html insertion (v2.7.1+) - robust regex handling
+- ✅ Bash for simple replacements (domain URLs, root paths)
+- ✅ No complex sed escaping issues
+
 **Key Features:**
 - ✅ Preserves query strings: `page?query=value`
 - ✅ Preserves anchors: `page#section`
@@ -81,7 +88,7 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 **Processing:**
 1. Domain-absolute URLs → relative: `https://domain.com/path` → `./path`
 2. Root-relative → relative: `/path` → `./path`
-3. Add `.html` to page links: `./services` → `./services.html`
+3. Add `.html` to page links: `./services` → `./services.html` (Python)
 4. Clean up double extensions: `page.html.html` → `page.html`
 
 ## 🛡️ Validation System
@@ -139,7 +146,7 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 ├── workflows/
 │   └── deploy.yml          # Main deployment workflow
 └── scripts/
-    ├── fix-paths.sh        # Path rewriting (v2.7+)
+    ├── fix-paths.sh        # Path rewriting (v2.7.1+ with Python)
     └── validate-deploy.sh  # Validation (soft/strict modes)
 ```
 
@@ -156,8 +163,9 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Broken CSS/JS | Absolute paths | Check `base_href` matches GitHub Pages URL |
-| Links with `?query` broken | Old fix-paths | Update to v2.7+ |
-| Links with `#anchor` broken | Old fix-paths | Update to v2.7+ |
+| Links with `?query` broken | Old fix-paths (<v2.7) | Update to v2.7.1+ |
+| Links with `#anchor` broken | Old fix-paths (<v2.7) | Update to v2.7.1+ |
+| `sed: unknown option to 's'` | v2.7 regex bug | Update to v2.7.1+ (uses Python) |
 | Artifact not found | Invalid `run_id` | Verify run_id in source repo Actions |
 | Push failed: 403 | PAT permissions | Add `contents:write` to PAT |
 | Validation too strict | Default strict mode | Set `STRICT_VALIDATION=false` |
@@ -175,15 +183,24 @@ env:
 
 ## 📊 Changelog
 
-### v2.7 (2026-01-01) — Major Improvements
+### v2.7.1 (2026-01-01) — CRITICAL Bugfix ⚠️
+
+**fix-paths.sh:**
+- 🔥 **CRITICAL FIX:** Replaced broken sed regex with Python script
+- ❌ v2.7 had: `sed: -e expression #1, char 27: unknown option to 's'`
+- ✅ Python handles complex regex without escaping issues
+- ✅ Correctly processes query strings and anchors
+- ✅ Production ready - all workflows passing
+
+**If you're on v2.7, update immediately to v2.7.1!**
+
+### v2.7 (2026-01-01) — Major Improvements (DEPRECATED - use v2.7.1)
 
 **fix-paths.sh:**
 - ✨ **NEW:** Query string preservation (`?query=value`)
 - ✨ **NEW:** Anchor preservation (`#section`)
 - ✨ **NEW:** Smart `.html` insertion before queries/anchors
-- ✅ Diff-based change tracking (accurate counts)
-- ✅ Per-file line change reporting
-- ✅ Better handling of edge cases
+- ❌ **BUG:** sed regex escaping issues - fixed in v2.7.1
 
 **validate-deploy.sh:**
 - ✨ **NEW:** Soft validation mode (default)
