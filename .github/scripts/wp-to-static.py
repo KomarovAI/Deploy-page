@@ -41,11 +41,13 @@ class WordPressDestroyer:
 </html>
 """
     
-    def __init__(self, base_path: str = "/"):
+    def __init__(self, base_path: str = "/", original_domain: str = ""):
         self.base_path = base_path.rstrip('/')
+        self.original_domain = original_domain.rstrip('/')
         self.converted = 0
         self.cleaned_scripts = 0
         self.cleaned_styles = 0
+        self.converted_absolute_urls = 0
         self.css_files: Set[str] = set()
         self.js_files: Set[str] = set()
     
@@ -116,8 +118,45 @@ class WordPressDestroyer:
         return js_files
     
     def fix_url(self, url: str) -> str:
-        """Fix single URL with anchor support."""
-        if url.startswith(('http://', 'https://', '//', '#', 'mailto:', 'tel:')):
+        """Fix single URL with anchor support and original domain conversion."""
+        if not url:
+            return url
+        
+        # Skip special protocols
+        if url.startswith(('#', 'mailto:', 'tel:', 'javascript:', 'data:')):
+            return url
+        
+        original_url = url
+        
+        # Convert absolute URLs from original domain to relative
+        if self.original_domain and url.startswith(('http://', 'https://', '//')):
+            # Normalize protocol-relative URLs
+            if url.startswith('//'):
+                url = 'https:' + url
+            
+            # Check if URL belongs to original domain
+            domain_variants = [
+                self.original_domain,
+                self.original_domain.replace('https://', 'http://'),
+                self.original_domain.replace('http://', 'https://'),
+                self.original_domain.replace('https://', '//'),
+                self.original_domain.replace('http://', '//')
+            ]
+            
+            for domain in domain_variants:
+                if url.startswith(domain):
+                    # Remove domain, keep path
+                    url = url[len(domain):]
+                    if not url.startswith('/'):
+                        url = '/' + url
+                    self.converted_absolute_urls += 1
+                    break
+            else:
+                # External domain - keep as is
+                return original_url
+        
+        # Skip external URLs
+        if url.startswith(('http://', 'https://', '//')):
             return url
         
         # Split anchor
@@ -165,11 +204,8 @@ class WordPressDestroyer:
             style = tag['style']
             def replace_url(match):
                 url = match.group(1).strip('"\'')
-                if not url.startswith(('http://', 'https://', '//')):
-                    clean_url = url.lstrip('/')
-                    fixed = f"{self.base_path}/{clean_url}" if self.base_path != '/' else f"/{clean_url}"
-                    return f'url("{fixed}")'
-                return match.group(0)
+                fixed = self.fix_url(url)
+                return f'url("{fixed}")'
             tag['style'] = re.sub(r'url\(([^)]+)\)', replace_url, style)
     
     def build_clean_html(self, title: str, content: Tag, css_files: List[str], js_files: List[str]) -> str:
@@ -254,6 +290,8 @@ class WordPressDestroyer:
         
         print(f"\n🔥 WORDPRESS DESTROYER")
         print(f"Base path: {self.base_path}")
+        if self.original_domain:
+            print(f"Original domain: {self.original_domain}")
         print("=" * 60)
         
         html_files = [
@@ -273,6 +311,7 @@ class WordPressDestroyer:
                 print(f"   ✓ {rel_path}")
         
         print(f"\n✅ Converted {self.converted} files")
+        print(f"🔗 Converted {self.converted_absolute_urls} absolute URLs")
         print(f"🗑️  Removed {self.cleaned_scripts} WP scripts")
         print(f"🗑️  Removed {self.cleaned_styles} WP styles\n")
         
@@ -288,7 +327,8 @@ class WordPressDestroyer:
 if __name__ == '__main__':
     try:
         base_path = os.getenv('BASE_PATH', '/')
-        destroyer = WordPressDestroyer(base_path=base_path)
+        original_domain = os.getenv('ORIGINAL_DOMAIN', '')
+        destroyer = WordPressDestroyer(base_path=base_path, original_domain=original_domain)
         sys.exit(destroyer.run())
     except KeyboardInterrupt:
         print("\n⚠️ Interrupted")
