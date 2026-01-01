@@ -10,6 +10,10 @@ on:
         description: 'Source repository (owner/repo)'
         required: true
         default: 'KomarovAI/web-crawler'
+      basepath:
+        description: 'Base path (e.g., /Deploy-page/ or / for root)'
+        required: false
+        default: '/Deploy-page/'
 
 permissions:
   contents: read
@@ -38,7 +42,7 @@ jobs:
           search_artifacts: true
           workflow_conclusion: success
 
-      - name: Fix flattened file structure (bash only)
+      - name: Fix flattened file structure
         run: |
           echo "🔧 Restructuring files for GitHub Pages..."
           cd site-content
@@ -55,13 +59,12 @@ jobs:
           
           # Process HTML files with flattened names
           for file in *.html; do
-            [ "$file" = "*.html" ] && break  # No HTML files
+            [ "$file" = "*.html" ] && break
             [ "$file" = "index.html" ] && continue
             [ "$file" = "404.html" ] && continue
             
             name="${file%.html}"
             
-            # Match known prefixes using case/esac
             case "$name" in
               sectors*)
                 rest="${name#sectors}"
@@ -88,7 +91,6 @@ jobs:
                 echo "  ✓ $file → news$rest/index.html"
                 ;;
               *)
-                # Other files: name.html -> name/index.html
                 mkdir -p "$name"
                 mv "$file" "$name/index.html"
                 echo "  ✓ $file → $name/index.html"
@@ -97,9 +99,58 @@ jobs:
           done
           
           echo "✅ Structure ready!"
-          echo ""
-          echo "Final structure:"
-          find . -name 'index.html' | head -20
+
+      - name: Fix paths for GitHub Pages
+        run: |
+          echo "🔗 Fixing URLs for base path: ${{ github.event.inputs.basepath }}"
+          cd site-content
+          
+          cat > fix_paths.py << 'PYTHON_SCRIPT'
+          import re
+          import sys
+          from pathlib import Path
+          
+          BASE_PATH = "${{ github.event.inputs.basepath }}".rstrip('/') + '/'
+          if BASE_PATH == '//': BASE_PATH = '/'
+          
+          print(f"Base path: {BASE_PATH}")
+          
+          def fix_html(file_path):
+              try:
+                  content = file_path.read_text(encoding='utf-8', errors='ignore')
+                  original = content
+                  
+                  # Fix absolute paths: /path/ -> /Deploy-page/path/
+                  # But NOT: //external.com or http:// or https://
+                  content = re.sub(
+                      r'(["\'])(/(?![/\w-]+\.(jpg|png|gif|svg|css|js|woff|woff2))(?!/)([^"\']*))',
+                      r'\1' + BASE_PATH + r'\3',
+                      content
+                  )
+                  
+                  # Fix href and src starting with /
+                  content = re.sub(
+                      r'(href|src)="/([^/])',
+                      r'\1="' + BASE_PATH + r'\2',
+                      content
+                  )
+                  
+                  if content != original:
+                      file_path.write_text(content, encoding='utf-8')
+                      return 1
+                  return 0
+              except Exception as e:
+                  print(f"Error in {file_path}: {e}", file=sys.stderr)
+                  return 0
+          
+          fixed = 0
+          for html in Path('.').rglob('*.html'):
+              fixed += fix_html(html)
+          
+          print(f"✅ Fixed {fixed} HTML files")
+          PYTHON_SCRIPT
+          
+          python3 fix_paths.py
 
       - name: Upload to GitHub Pages
         uses: actions/upload-pages-artifact@v3
