@@ -4,7 +4,7 @@
 import sys
 import shutil
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 import re
 
 # Auto-install dependencies
@@ -51,6 +51,14 @@ class StaticSiteFixer:
         'sitemap.xml',
     }
     
+    # Known directory prefixes for WordPress sites (ordered by length, longest first)
+    DIRECTORY_PREFIXES = [
+        'category',
+        'sectors',
+        'services',
+        'news',
+    ]
+    
     # Legacy scripts to remove
     LEGACY_SCRIPTS = [
         'autoptimize',
@@ -67,13 +75,35 @@ class StaticSiteFixer:
         self.files_restructured = 0
         logger.info("StaticSiteFixer initialized")
     
+    def detect_directory_structure(self, filename: str) -> Optional[Tuple[str, str]]:
+        """Detect directory structure from flattened filename.
+        
+        Examples:
+            sectorsbars-pubs.html -> ('sectors', 'bars-pubs')
+            categoryinsights.html -> ('category', 'insights')
+            newschristmas-opening.html -> ('news', 'christmas-opening')
+        
+        Returns:
+            (directory, basename) tuple or None if no prefix matches
+        """
+        # Try each known prefix
+        for prefix in self.DIRECTORY_PREFIXES:
+            if filename.startswith(prefix):
+                # Extract the rest after prefix
+                rest = filename[len(prefix):]
+                if rest:  # Make sure there's something after the prefix
+                    return (prefix, rest)
+        
+        return None
+    
     def restructure_files(self, cwd: Path) -> int:
         """Restructure HTML files: sectors/bars-pubs.html -> sectors/bars-pubs/index.html.
         
         This fixes GitHub Pages 404 errors for WordPress-style URLs (/sectors/bars-pubs/)
         by creating a folder structure compatible with GitHub Pages routing.
         
-        Handles both root-level and nested HTML files while preserving directory structure.
+        Also handles flattened filenames (e.g., sectorsbars-pubs.html) by detecting
+        and restoring the directory structure.
         """
         console.print("\n[bold cyan]📁 STEP 1: Restructuring file layout...[/bold cyan]")
         
@@ -101,18 +131,38 @@ class StaticSiteFixer:
                 parent_dir = rel_path.parent
                 base_name = html_file.stem
                 
-                # Create target folder: parent/base_name/
-                # CRITICAL FIX: Ensure parent_dir is properly included in the path
-                if str(parent_dir) == '.':
-                    # File is in root directory
-                    target_folder = cwd / base_name
+                # CRITICAL FIX: Detect if filename is flattened (e.g., sectorsbars-pubs)
+                detected_structure = self.detect_directory_structure(base_name)
+                
+                if detected_structure:
+                    # Flattened filename detected - restore directory structure
+                    dir_prefix, file_base = detected_structure
+                    
+                    # Build path: parent/dir_prefix/file_base/
+                    if str(parent_dir) == '.':
+                        target_folder = cwd / dir_prefix / file_base
+                    else:
+                        target_folder = cwd / parent_dir / dir_prefix / file_base
+                    
+                    old_structure = f"{base_name}.html"
+                    new_structure = f"{dir_prefix}/{file_base}/index.html"
+                    
                 else:
-                    # File is in a subdirectory - preserve the full path
-                    target_folder = cwd / parent_dir / base_name
+                    # Normal filename - use existing structure
+                    if str(parent_dir) == '.':
+                        # File is in root directory
+                        target_folder = cwd / base_name
+                        new_structure = f"{base_name}/index.html"
+                    else:
+                        # File is in a subdirectory - preserve the full path
+                        target_folder = cwd / parent_dir / base_name
+                        new_structure = f"{parent_dir}/{base_name}/index.html"
+                    
+                    old_structure = str(rel_path)
                 
                 target_folder.mkdir(parents=True, exist_ok=True)
                 
-                # Target file: parent/base_name/index.html
+                # Target file: directory/basename/index.html
                 target_file = target_folder / "index.html"
                 
                 # Copy file content
@@ -121,12 +171,8 @@ class StaticSiteFixer:
                 # Remove original file
                 html_file.unlink()
                 
-                # Show relative paths in output
-                old_path = str(rel_path)
-                new_path = str(target_file.relative_to(cwd))
-                
-                logger.info(f"Restructured: {old_path} -> {new_path}")
-                console.print(f"   [green]✓[/green] {old_path} → {new_path}")
+                logger.info(f"Restructured: {old_structure} -> {new_structure}")
+                console.print(f"   [green]✓[/green] {old_structure} → {new_structure}")
                 restructured += 1
                 
             except Exception as e:
@@ -221,7 +267,7 @@ class StaticSiteFixer:
         console.print(Panel.fit(
             "[bold magenta]🚀 Static Site Fixer for GitHub Pages[/bold magenta]\n"
             "[yellow]Fixing:[/yellow] WordPress static exports\n"
-            "[green]Actions:[/green] Restructure files, inject nav fix, remove legacy scripts",
+            "[green]Actions:[/green] Restore & restructure files, inject nav fix, remove legacy scripts",
             border_style="magenta"
         ))
         
