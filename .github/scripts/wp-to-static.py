@@ -30,21 +30,26 @@ class WordPressDestroyer:
     # GitHub Pages configuration
     BASE_PATH = "/archived-sites"
     
+    # CRITICAL: Whitelist paths - ALWAYS KEEP
+    WHITELIST_PATHS = [
+        'wp-content/themes/',
+        'wp-content/plugins/',
+        'wp-content/uploads/'
+    ]
+    
     # WordPress garbage to remove
-    WP_SCRIPTS = [
-        'wp-emoji', 'wp-embed', 'jquery-migrate', 'comment-reply',
-        'autoptimize', 'wp-polyfill', 'regenerator-runtime',
-        'wp-block-library', 'wp-includes', 'wp-admin'
-    ]
-    
-    WP_STYLES = [
-        'wp-block-library', 'classic-theme-styles', 'global-styles',
-        'wp-emoji-styles', 'dashicons'
-    ]
-    
-    WP_META_NAMES = [
-        'generator', 'robots', 'articleBody', 'articleSection',
-        'author', 'DC.date.issued'
+    WP_BLACKLIST = [
+        'wp-includes/',
+        'wp-admin/',
+        'wp-block-library',
+        'dashicons',
+        'wp-emoji',
+        'jquery-migrate',
+        'autoptimize',
+        'wp-polyfill',
+        'regenerator-runtime',
+        'comment-reply',
+        'wp-embed'
     ]
     
     # Clean HTML template
@@ -72,33 +77,55 @@ class WordPressDestroyer:
         self.css_files: Set[str] = set()
         self.js_files: Set[str] = set()
     
-    def is_wp_garbage(self, url: str) -> bool:
-        """Check if URL is WordPress garbage."""
+    def is_whitelisted(self, url: str) -> bool:
+        """Check if resource is critical (theme/plugins)."""
         if not url:
             return False
-        return any(wp in url.lower() for wp in self.WP_SCRIPTS + self.WP_STYLES)
+        url_lower = url.lower()
+        return any(path in url_lower for path in self.WHITELIST_PATHS)
+    
+    def is_blacklisted(self, url: str) -> bool:
+        """Check if resource is WordPress garbage."""
+        if not url:
+            return False
+        url_lower = url.lower()
+        return any(wp in url_lower for wp in self.WP_BLACKLIST)
+    
+    def should_keep_resource(self, url: str) -> bool:
+        """Decide if resource should be kept.
+        
+        Priority:
+        1. External URLs -> skip
+        2. Whitelist (themes/plugins) -> KEEP
+        3. Blacklist (WP core) -> REMOVE
+        4. Default -> keep (safe)
+        """
+        # Skip external
+        if url.startswith(('http://', 'https://', '//')):
+            return False
+        
+        # Whitelist first - critical resources
+        if self.is_whitelisted(url):
+            return True
+        
+        # Blacklist second - WP garbage
+        if self.is_blacklisted(url):
+            return False
+        
+        # Default: keep
+        return True
     
     def extract_title(self, soup: BeautifulSoup) -> str:
         """Extract page title."""
         title_tag = soup.find('title')
         if title_tag and title_tag.string:
-            # Clean WordPress suffix
             title = title_tag.string.strip()
-            title = re.sub(r'\s*[|–-]\s*.*$', '', title)  # Remove site name
+            title = re.sub(r'\s*[|–-]\s*.*$', '', title)
             return title
         return "Page"
     
     def extract_content(self, soup: BeautifulSoup) -> Optional[Tag]:
-        """Extract main content, removing WordPress wrapper.
-        
-        Tries multiple selectors to find actual content:
-        1. <main>
-        2. .entry-content
-        3. article
-        4. #content
-        5. body (fallback)
-        """
-        # Priority order of content selectors
+        """Extract main content."""
         selectors = [
             'main',
             '.entry-content',
@@ -111,35 +138,24 @@ class WordPressDestroyer:
         for selector in selectors:
             content = soup.select_one(selector)
             if content:
-                # Clone to avoid modifying original
                 content_copy = BeautifulSoup(str(content), 'lxml').find()
-                
-                # Remove WordPress junk from content
                 for junk in content_copy.select('.wp-block-code, .sharedaddy, .jp-relatedposts'):
                     junk.decompose()
-                
                 return content_copy
         
         return None
     
     def collect_css(self, soup: BeautifulSoup, cwd: Path) -> List[str]:
-        """Collect CSS files, filter out WordPress garbage.
-        
-        Returns:
-            List of valid CSS file paths (relative to site root)
-        """
+        """Collect CSS with intelligent filtering."""
         css_files = []
         
         for link in soup.find_all('link', rel='stylesheet', href=True):
             href = link['href']
             
-            # Skip external URLs
-            if href.startswith(('http://', 'https://', '//')):
-                continue
-            
-            # Skip WordPress garbage
-            if self.is_wp_garbage(href):
-                self.cleaned_styles += 1
+            # Apply smart filter
+            if not self.should_keep_resource(href):
+                if self.is_blacklisted(href):
+                    self.cleaned_styles += 1
                 continue
             
             # Normalize path
@@ -150,19 +166,16 @@ class WordPressDestroyer:
         return css_files
     
     def collect_js(self, soup: BeautifulSoup) -> List[str]:
-        """Collect JS files, filter out WordPress garbage."""
+        """Collect JS with intelligent filtering."""
         js_files = []
         
         for script in soup.find_all('script', src=True):
             src = script['src']
             
-            # Skip external URLs
-            if src.startswith(('http://', 'https://', '//')):
-                continue
-            
-            # Skip WordPress garbage
-            if self.is_wp_garbage(src):
-                self.cleaned_scripts += 1
+            # Apply smart filter
+            if not self.should_keep_resource(src):
+                if self.is_blacklisted(src):
+                    self.cleaned_scripts += 1
                 continue
             
             # Normalize path
@@ -173,17 +186,11 @@ class WordPressDestroyer:
         return js_files
     
     def fix_paths_in_content(self, content: Tag, base_path: str) -> None:
-        """Fix all paths in extracted content.
-        
-        Args:
-            content: BeautifulSoup content tag
-            base_path: Base path for GitHub Pages (e.g., /archived-sites)
-        """
+        """Fix all paths in extracted content."""
         # Fix images
         for img in content.find_all('img', src=True):
             src = img['src']
             if not src.startswith(('http://', 'https://', '//')):
-                # Convert to absolute path with base
                 clean_src = src.lstrip('/')
                 img['src'] = f"{base_path}/{clean_src}"
         
@@ -191,28 +198,23 @@ class WordPressDestroyer:
         for a in content.find_all('a', href=True):
             href = a['href']
             
-            # Skip external links and anchors
             if href.startswith(('http://', 'https://', '//', '#', 'mailto:', 'tel:')):
                 continue
             
-            # Internal link - convert to absolute
             clean_href = href.lstrip('./')
             
-            # Handle .html extensions
             if clean_href.endswith('.html'):
-                # Convert to directory format: page.html -> /page/
-                page_name = clean_href[:-5]  # Remove .html
+                page_name = clean_href[:-5]
                 a['href'] = f"{base_path}/{page_name}/"
             elif not clean_href.endswith('/'):
                 a['href'] = f"{base_path}/{clean_href}/"
             else:
                 a['href'] = f"{base_path}/{clean_href}"
         
-        # Fix background images in style attributes
+        # Fix background images in style
         for tag in content.find_all(style=True):
             style = tag['style']
             
-            # Fix url() in styles
             def replace_url(match):
                 url = match.group(1).strip('"\'')
                 if not url.startswith(('http://', 'https://', '//')):
@@ -223,35 +225,23 @@ class WordPressDestroyer:
             tag['style'] = re.sub(r'url\(([^)]+)\)', replace_url, style)
     
     def build_clean_html(self, title: str, content: Tag, css_files: List[str], js_files: List[str]) -> str:
-        """Build clean HTML from components.
-        
-        Args:
-            title: Page title
-            content: Main content tag
-            css_files: List of CSS file paths
-            js_files: List of JS file paths
-        
-        Returns:
-            Clean HTML string
-        """
-        # Build CSS links
+        """Build clean HTML."""
+        # CSS links
         css_links = []
         for css in css_files:
             css_links.append(f'    <link rel="stylesheet" href="{self.BASE_PATH}/{css}">')
-        
         critical_css = '\n'.join(css_links) if css_links else ''
         
-        # Build JS scripts
+        # JS scripts
         js_scripts = []
         for js in js_files:
             js_scripts.append(f'    <script src="{self.BASE_PATH}/{js}" defer></script>')
-        
         scripts = '\n'.join(js_scripts) if js_scripts else ''
         
-        # Basic meta tags
+        # Meta tags
         meta_tags = f'    <meta name="description" content="{title}">'
         
-        # Build final HTML
+        # Build HTML
         html = self.CLEAN_TEMPLATE.format(
             title=title,
             critical_css=critical_css,
@@ -263,59 +253,33 @@ class WordPressDestroyer:
         return html
     
     def convert_file(self, html_file: Path, cwd: Path) -> bool:
-        """Convert single WordPress HTML to clean static HTML.
-        
-        Args:
-            html_file: Path to WordPress HTML file
-            cwd: Repository root directory
-        
-        Returns:
-            True if converted successfully
-        """
+        """Convert single WordPress HTML to clean static HTML."""
         try:
-            # Read WordPress HTML
             content_raw = html_file.read_text(encoding='utf-8', errors='ignore')
             soup = BeautifulSoup(content_raw, 'lxml')
             
-            # Extract components
             title = self.extract_title(soup)
             content = self.extract_content(soup)
             
             if not content:
-                print(f"   ⚠ No content found in {html_file.name}")
+                print(f"   ⚠ No content: {html_file.name}")
                 return False
             
-            # Fix paths in content
             self.fix_paths_in_content(content, self.BASE_PATH)
-            
-            # Collect resources
             css_files = self.collect_css(soup, cwd)
             js_files = self.collect_js(soup)
-            
-            # Build clean HTML
             clean_html = self.build_clean_html(title, content, css_files, js_files)
             
-            # Write clean HTML
             html_file.write_text(clean_html, encoding='utf-8')
-            
             self.converted += 1
             return True
             
         except Exception as e:
-            print(f"   ✗ Error converting {html_file.name}: {e}")
+            print(f"   ✗ Error {html_file.name}: {e}")
             return False
     
     def restructure_pages(self, cwd: Path) -> None:
-        """Restructure flat HTML files into directory structure.
-        
-        Converts:
-            page.html -> page/index.html
-            about.html -> about/index.html
-        
-        Keeps:
-            index.html -> index.html
-            404.html -> 404.html
-        """
+        """Restructure flat HTML to directory structure."""
         print("\n📁 RESTRUCTURING:")
         print("═" * 80)
         
@@ -332,21 +296,13 @@ class WordPressDestroyer:
         for html_file in html_files:
             try:
                 page_name = html_file.stem
-                
-                # Create directory
                 page_dir = cwd / page_name
                 page_dir.mkdir(exist_ok=True)
-                
-                # Move to directory/index.html
                 target = page_dir / 'index.html'
                 shutil.move(str(html_file), str(target))
-                
                 print(f"   ✓ {html_file.name} → {page_name}/index.html")
                 restructured += 1
-                
-                # Update site map
                 self.site_map[html_file.name] = f"{page_name}/"
-                
             except Exception as e:
                 print(f"   ✗ Error: {html_file.name}: {e}")
         
@@ -354,7 +310,7 @@ class WordPressDestroyer:
         print(f"✅ Restructured {restructured} pages\n")
     
     def create_404_page(self, cwd: Path) -> None:
-        """Create clean 404 page if missing."""
+        """Create 404 page if missing."""
         page_404 = cwd / '404.html'
         
         if page_404.exists():
@@ -372,7 +328,7 @@ class WordPressDestroyer:
         print("✅ Created 404.html\n")
     
     def run(self) -> int:
-        """Execute WordPress destruction and static site creation."""
+        """Execute WordPress destruction."""
         cwd = Path.cwd()
         
         print("\n🔥 WORDPRESS DESTROYER")
@@ -381,7 +337,6 @@ class WordPressDestroyer:
         print(f"Site URL: https://komarovai.github.io{self.BASE_PATH}/")
         print("═" * 80)
         
-        # Find all HTML files
         html_files = [
             f for f in cwd.rglob('*.html')
             if '.git' not in f.parts and '.github' not in f.parts
@@ -393,8 +348,8 @@ class WordPressDestroyer:
         
         print(f"\nFound {len(html_files)} HTML files\n")
         
-        # STEP 1: Convert all HTML files
-        print("🧹 CONVERTING TO STATIC:")
+        # Convert
+        print("🧹 CONVERTING:")
         print("═" * 80)
         
         for html_file in html_files:
@@ -404,37 +359,30 @@ class WordPressDestroyer:
         
         print("═" * 80)
         print(f"✅ Converted {self.converted} files")
-        print(f"🗑️  Removed {self.cleaned_scripts} WordPress scripts")
-        print(f"🗑️  Removed {self.cleaned_styles} WordPress styles\n")
+        print(f"🗑️  Removed {self.cleaned_scripts} WP scripts")
+        print(f"🗑️  Removed {self.cleaned_styles} WP styles\n")
         
-        # STEP 2: Restructure pages
+        # Restructure
         self.restructure_pages(cwd)
         
-        # STEP 3: Create 404 page
+        # 404
         self.create_404_page(cwd)
         
-        # STEP 4: Report collected resources
+        # Resources report
         print("📦 RESOURCES:")
         print("═" * 80)
-        print(f"   CSS files: {len(self.css_files)}")
-        print(f"   JS files: {len(self.js_files)}")
+        print(f"   CSS: {len(self.css_files)}")
+        print(f"   JS: {len(self.js_files)}")
         
         if self.css_files:
             print("\n   CSS:")
-            for css in sorted(self.css_files)[:10]:
+            for css in sorted(self.css_files)[:5]:
                 print(f"     - {css}")
-            if len(self.css_files) > 10:
-                print(f"     ... and {len(self.css_files) - 10} more")
-        
-        if self.js_files:
-            print("\n   JS:")
-            for js in sorted(self.js_files)[:10]:
-                print(f"     - {js}")
-            if len(self.js_files) > 10:
-                print(f"     ... and {len(self.js_files) - 10} more")
+            if len(self.css_files) > 5:
+                print(f"     ... +{len(self.css_files) - 5} more")
         
         print("\n═" * 80)
-        print("\n✅ WORDPRESS DESTROYED, STATIC SITE BUILT\n")
+        print("\n✅ WORDPRESS DESTROYED\n")
         
         return 0
 
@@ -447,7 +395,7 @@ if __name__ == '__main__':
         print("\n⚠️ Interrupted")
         sys.exit(1)
     except Exception as e:
-        print(f"\n❌ Fatal error: {e}")
+        print(f"\n❌ Fatal: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
