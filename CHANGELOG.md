@@ -2,6 +2,168 @@
 
 All notable changes to Deploy-page project.
 
+## [3.3.0] - 2026-01-01
+
+### 🔗 Absolute URL Conversion
+
+**Problem:** Crawled sites contain absolute URLs pointing to original domain (e.g., `https://www.example.com/page`). These links break after deployment to GitHub Pages.
+
+**Example Issue:**
+```html
+<!-- Crawled HTML -->
+<a href="https://www.caterkitservices.com/sectors/restaurants/">Restaurants</a>
+<img src="https://www.caterkitservices.com/wp-content/uploads/image.jpg">
+
+<!-- After deploy (broken) -->
+<a href="https://www.caterkitservices.com/sectors/restaurants/">Restaurants</a>  <!-- ❌ Dead link! -->
+```
+
+**Solution:** New `original_domain` parameter converts absolute URLs to relative:
+
+```python
+def fix_url(self, url: str) -> str:
+    # NEW: Check if URL belongs to original domain
+    if self.original_domain and url.startswith(self.original_domain):
+        # Remove domain, keep path
+        url = url[len(self.original_domain):]
+        self.converted_absolute_urls += 1
+    
+    # Continue with relative path processing...
+```
+
+**Result:**
+```html
+<!-- After deploy (working) -->
+<a href="/archived-sites/sectors/restaurants/">Restaurants</a>  <!-- ✅ Fixed! -->
+<img src="/archived-sites/wp-content/uploads/image.jpg">
+```
+
+### ✨ New Features
+
+#### 1. `original_domain` Workflow Input
+
+```yaml
+original_domain:
+  description: 'Original domain to convert (e.g. https://example.com)'
+  required: false
+  default: ''
+```
+
+**Usage:**
+```bash
+gh workflow run deploy.yml \
+  -f run_id=12345 \
+  -f target_repo=user/archived-sites \
+  -f base_path="/archived-sites" \
+  -f original_domain="https://www.caterkitservices.com"
+```
+
+#### 2. Smart Domain Detection
+
+**Handles multiple URL formats:**
+- `https://example.com/path` → `/base-path/path`
+- `http://example.com/path` → `/base-path/path`
+- `//example.com/path` → `/base-path/path` (protocol-relative)
+
+**Preserves external links:**
+- `https://google.com` → unchanged
+- `https://facebook.com/share` → unchanged
+
+#### 3. Conversion Counter
+
+**New log output:**
+```
+✅ Converted 247 files
+🔗 Converted 247 absolute URLs  # NEW!
+🗑️  Removed 15 WP scripts
+🗑️  Removed 8 WP styles
+```
+
+### 🔧 Technical Implementation
+
+**Changes in `wp-to-static.py`:**
+
+1. **Constructor:**
+```python
+def __init__(self, base_path: str = "/", original_domain: str = ""):
+    self.original_domain = original_domain.rstrip('/')
+    self.converted_absolute_urls = 0  # NEW counter
+```
+
+2. **URL Conversion Logic:**
+```python
+def fix_url(self, url: str) -> str:
+    # Convert absolute URLs from original domain
+    if self.original_domain and url.startswith(('http://', 'https://', '//')):
+        domain_variants = [
+            self.original_domain,
+            self.original_domain.replace('https://', 'http://'),
+            self.original_domain.replace('http://', 'https://'),
+            self.original_domain.replace('https://', '//'),
+        ]
+        
+        for domain in domain_variants:
+            if url.startswith(domain):
+                url = url[len(domain):]  # Remove domain
+                if not url.startswith('/'):
+                    url = '/' + url
+                self.converted_absolute_urls += 1
+                break
+        else:
+            # External domain - keep as is
+            return url
+```
+
+3. **Environment Variable:**
+```python
+if __name__ == '__main__':
+    base_path = os.getenv('BASE_PATH', '/')
+    original_domain = os.getenv('ORIGINAL_DOMAIN', '')  # NEW
+    destroyer = WordPressDestroyer(base_path, original_domain)
+```
+
+**Changes in `deploy.yml`:**
+
+```yaml
+- name: Convert WordPress
+  env:
+    BASE_PATH: ${{ github.event.inputs.base_path }}
+    ORIGINAL_DOMAIN: ${{ github.event.inputs.original_domain }}  # NEW
+  run: |
+    python3 wp-to-static.py
+```
+
+### 🐛 Fixed Issues
+
+| Issue | Before | After |
+|-------|--------|-------|
+| Absolute URLs | `https://example.com/page` → unchanged (❌ broken) | `https://example.com/page` → `/base-path/page` (✅ fixed) |
+| Protocol-relative | `//example.com/path` → unchanged | `//example.com/path` → `/base-path/path` |
+| External links | N/A | Preserved (different domains) |
+| Mixed URLs | Partial support | Full support |
+
+### 📊 Impact
+
+**Before v3.3.0:**
+- Crawled sites with absolute URLs were broken after deploy
+- All internal links pointed to dead original domain
+- Manual find/replace needed in HTML files
+
+**After v3.3.0:**
+- Automatic conversion of all absolute URLs
+- Works for ANY original domain
+- No manual intervention needed
+- External links preserved correctly
+
+### 📝 Documentation Updates
+
+- Added `original_domain` parameter to README
+- Added usage examples with domain conversion
+- Updated troubleshooting section
+- Added "Absolute URL Conversion" feature description
+
+---
+
 ## [3.2.0] - 2026-01-01
 
 ### 🔒 BREAKING: Atomic Deployments
