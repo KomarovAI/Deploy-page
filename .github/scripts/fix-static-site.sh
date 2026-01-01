@@ -1,254 +1,255 @@
 #!/usr/bin/env python3
-"""Fix static site issues for WordPress exports."""
+"""Fix static site issues for GitHub Pages deployment."""
 
 import sys
-import re
 from pathlib import Path
 from typing import List, Tuple
 
+# Auto-install dependencies
 try:
     from bs4 import BeautifulSoup
+    from rich.console import Console
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+    from rich.panel import Panel
+    from rich.table import Table
+    from loguru import logger
 except ImportError:
-    print("⚠️  BeautifulSoup4 not found, installing...")
+    print("📦 Installing dependencies...")
     import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "beautifulsoup4", "lxml"])
+    subprocess.check_call([
+        sys.executable, "-m", "pip", "install",
+        "beautifulsoup4", "lxml", "rich", "loguru", "-q"
+    ])
     from bs4 import BeautifulSoup
+    from rich.console import Console
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+    from rich.panel import Panel
+    from rich.table import Table
+    from loguru import logger
+
+# Setup console and logger
+console = Console()
+logger.remove()
+logger.add(
+    "/tmp/fix-static-site-{time}.log",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
+    level="DEBUG"
+)
+logger.add(lambda msg: None)
 
 
 class StaticSiteFixer:
-    """WordPress static site fixer."""
+    """Fix static site issues for GitHub Pages."""
+    
+    # Navigation fix JavaScript
+    NAVIGATION_FIX_JS = '''<script>
+// Override WordPress navigation for GitHub Pages
+(function() {
+  'use strict';
+  
+  // Intercept all link clicks
+  document.addEventListener('click', function(e) {
+    const link = e.target.closest('a');
+    if (!link) return;
+    
+    const href = link.getAttribute('href');
+    if (!href) return;
+    
+    // Skip external links, anchors, and special protocols
+    if (href.startsWith('http://') || 
+        href.startsWith('https://') || 
+        href.startsWith('//') ||
+        href.startsWith('#') ||
+        href.startsWith('mailto:') ||
+        href.startsWith('tel:')) {
+      return;
+    }
+    
+    // For internal links, ensure .html extension
+    e.preventDefault();
+    
+    let fixedHref = href;
+    
+    // Remove leading slash if present
+    if (fixedHref.startsWith('/')) {
+      fixedHref = '.' + fixedHref;
+    }
+    
+    // Add .html if no extension present
+    const hasExtension = /\.[a-z0-9]+$/i.test(fixedHref.split('?')[0].split('#')[0]);
+    if (!hasExtension) {
+      const parts = fixedHref.split('#');
+      parts[0] = parts[0].split('?')[0] + '.html' + (fixedHref.includes('?') ? '?' + fixedHref.split('?')[1].split('#')[0] : '');
+      fixedHref = parts.join('#');
+    }
+    
+    // Navigate
+    window.location.href = fixedHref;
+  }, false);
+  
+  console.log('\u2705 GitHub Pages navigation fix active');
+})();
+</script>'''
+    
+    # Legacy scripts to remove
+    LEGACY_SCRIPTS = [
+        'autoptimize',
+        'comment-reply',
+        'wp-embed',
+        'wp-emoji-release',
+        'jquery-migrate'
+    ]
     
     def __init__(self):
-        self.files_removed = 0
-        self.js_fixed = 0
-        self.html_patched = 0
-        self.artifacts_removed = 0
-        
-    def print_step(self, step: int, title: str):
-        """Print formatted step header."""
-        print(f"\n📦 Step {step}: {title}...")
-        print("━" * 46)
+        self.files_processed = 0
+        self.js_injected = 0
+        self.scripts_removed = 0
+        logger.info("StaticSiteFixer initialized")
     
-    def remove_legacy_js(self):
-        """Remove WordPress legacy JavaScript files."""
-        self.print_step(1, "Removing legacy WordPress JavaScript")
+    def remove_legacy_scripts(self, soup: BeautifulSoup) -> int:
+        """Remove legacy WordPress scripts."""
+        removed = 0
+        
+        # Remove script tags
+        for script in soup.find_all('script', src=True):
+            src = script.get('src', '')
+            if any(legacy in src for legacy in self.LEGACY_SCRIPTS):
+                logger.debug(f"Removing script: {src}")
+                script.decompose()
+                removed += 1
+        
+        # Remove inline scripts with legacy code
+        for script in soup.find_all('script'):
+            if script.string:
+                if any(legacy in script.string for legacy in ['wp.emoji', 'addComment']):
+                    logger.debug(f"Removing inline legacy script")
+                    script.decompose()
+                    removed += 1
+        
+        return removed
+    
+    def inject_navigation_fix(self, soup: BeautifulSoup) -> bool:
+        """Inject navigation fix script before </body>."""
+        body = soup.find('body')
+        if not body:
+            logger.warning("No <body> tag found")
+            return False
+        
+        # Create script tag
+        script_tag = soup.new_tag('script')
+        script_tag.string = self.NAVIGATION_FIX_JS.strip()
+        
+        # Insert before </body>
+        body.append(script_tag)
+        logger.debug("Navigation fix injected")
+        return True
+    
+    def process_html_file(self, file_path: Path) -> Tuple[bool, int]:
+        """Process a single HTML file."""
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+            soup = BeautifulSoup(content, "lxml")  # Fast lxml parser!
+            
+            modified = False
+            scripts_removed = 0
+            
+            # Remove legacy scripts
+            scripts_removed = self.remove_legacy_scripts(soup)
+            if scripts_removed > 0:
+                modified = True
+                self.scripts_removed += scripts_removed
+            
+            # Inject navigation fix
+            if self.inject_navigation_fix(soup):
+                modified = True
+                self.js_injected += 1
+            
+            # Save if modified
+            if modified:
+                file_path.write_text(str(soup), encoding="utf-8")
+                logger.info(f"{file_path.name}: injected nav fix, removed {scripts_removed} scripts")
+                return True, scripts_removed
+            
+            return False, 0
+            
+        except Exception as e:
+            logger.error(f"{file_path.name}: {e}")
+            return False, 0
+    
+    def run(self) -> int:
+        """Execute static site fixing with rich UI."""
+        # Header
+        console.print(Panel.fit(
+            "[bold magenta]🚀 Static Site Fixer[/bold magenta]\n"
+            "[yellow]Fixing:[/yellow] WordPress static exports\n"
+            "[green]Actions:[/green] Inject navigation fix, remove legacy scripts",
+            border_style="magenta"
+        ))
         
         cwd = Path.cwd()
+        logger.info(f"Working directory: {cwd}")
         
-        # Remove Autoptimize cache
-        autoptimize_dir = cwd / "wp-content" / "cache" / "autoptimize"
-        if autoptimize_dir.exists():
-            import shutil
-            shutil.rmtree(autoptimize_dir)
-            print("  ✓ Removed Autoptimize cache")
-            self.files_removed += 1
-        
-        # Remove problematic JS files
-        patterns = [
-            "comment-reply*.js",
-            "wp-embed*.js",
-            "customize-*.js"
-        ]
-        
-        for pattern in patterns:
-            for file in cwd.rglob(pattern):
-                if ".git" not in file.parts:
-                    file.unlink()
-                    if pattern.startswith("comment-reply"):
-                        print(f"  ✓ Removed {pattern}")
-                        self.files_removed += 1
-        
-        print(f"  📝 Total legacy files removed: {self.files_removed}")
-    
-    def check_theme_js(self):
-        """Check theme JavaScript for navigation conflicts."""
-        self.print_step(2, "Patching theme JavaScript")
-        
-        cwd = Path.cwd()
-        theme_js_files = list(cwd.glob("wp-content/themes/*/assets/js/*.js"))
-        theme_js_files = [f for f in theme_js_files if not f.name.endswith(".min.js")]
-        
-        if not theme_js_files:
-            print("  ℹ️  No theme JavaScript files found to patch")
-            return
-        
-        for js_file in theme_js_files:
-            content = js_file.read_text(encoding="utf-8", errors="ignore")
-            if "e.preventDefault()" in content:
-                print(f"  ⚠️  Found preventDefault in: {js_file.name}")
-                print("  → Manual review recommended for production")
-                self.js_fixed += 1
-        
-        if self.js_fixed > 0:
-            print(f"  📝 Theme JS files flagged: {self.js_fixed}")
-        else:
-            print("  ✓ No navigation conflicts found in theme JS")
-    
-    def inject_navigation_fix(self):
-        """Inject click handler fix into HTML files."""
-        self.print_step(3, "Injecting click handler fix")
-        
-        cwd = Path.cwd()
+        # Find HTML files
         html_files = [
             f for f in cwd.rglob("*.html")
             if ".git" not in f.parts and ".github" not in f.parts
         ]
         
         if not html_files:
-            print("  ⚠️  No HTML files found")
-            return
-        
-        print(f"  Processing {len(html_files)} HTML files...\n")
-        
-        # JavaScript fix to inject
-        js_fix = """<!-- Static Site Navigation Fix -->
-<script>
-(function() {
-  'use strict';
-  
-  // Wait for DOM to be fully loaded
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initNavigationFix);
-  } else {
-    initNavigationFix();
-  }
-  
-  function initNavigationFix() {
-    // Override ALL click handlers on internal links
-    document.addEventListener('click', function(e) {
-      var target = e.target;
-      var link = target.closest('a');
-      
-      if (!link) return;
-      
-      var href = link.getAttribute('href');
-      if (!href) return;
-      
-      // Check if it's an internal .html link
-      var isInternal = href.indexOf('.html') !== -1 && 
-                       href.indexOf('://') === -1 && 
-                       !href.startsWith('http') &&
-                       href !== '#';
-      
-      if (isInternal) {
-        // Stop ALL other event handlers (including legacy WordPress JS)
-        e.stopImmediatePropagation();
-        
-        // Only prevent default if it's not a special click
-        if (!e.ctrlKey && !e.metaKey && !e.shiftKey && e.button === 0) {
-          e.preventDefault();
-          
-          // Simple, reliable navigation
-          var fullHref = link.href || href;
-          window.location.href = fullHref;
-        }
-      }
-    }, true); // true = capturing phase (executes BEFORE other handlers)
-    
-    // Disable smooth scroll behaviors that might interfere
-    if (window.history && window.history.scrollRestoration) {
-      window.history.scrollRestoration = 'auto';
-    }
-  }
-})();
-</script>"""
-        
-        for html_file in html_files:
-            try:
-                # Read file
-                content = html_file.read_text(encoding="utf-8", errors="ignore")
-                
-                # Check if already patched (idempotent)
-                if "Static Site Navigation Fix" in content:
-                    print(f"  → {html_file.name}: already patched")
-                    continue
-                
-                # Parse HTML
-                soup = BeautifulSoup(content, "html.parser")
-                body_tag = soup.find("body")
-                
-                if not body_tag:
-                    print(f"  ⚠️  {html_file.name}: no <body> tag found")
-                    continue
-                
-                # Create script tag
-                script_tag = BeautifulSoup(js_fix, "html.parser")
-                
-                # Insert before </body>
-                body_tag.append(script_tag)
-                
-                # Write back
-                html_file.write_text(str(soup), encoding="utf-8")
-                
-                print(f"  ✓ {html_file.name}: navigation fix injected")
-                self.html_patched += 1
-                
-            except Exception as e:
-                print(f"  ❌ {html_file.name}: ERROR - {e}")
-        
-        print(f"\n  📝 HTML files patched: {self.html_patched} / {len(html_files)}")
-    
-    def cleanup_wordpress_artifacts(self):
-        """Clean up WordPress admin artifacts."""
-        self.print_step(4, "Cleaning WordPress artifacts")
-        
-        cwd = Path.cwd()
-        
-        # Remove wp-login files
-        for file in cwd.rglob("wp-login*"):
-            if ".git" not in file.parts:
-                file.unlink()
-        
-        # Remove specific files
-        artifacts = ["xmlrpc.php", "wp-cron.php"]
-        for artifact in artifacts:
-            file_path = cwd / artifact
-            if file_path.exists():
-                file_path.unlink()
-                print(f"  ✓ Removed {artifact}")
-                self.artifacts_removed += 1
-        
-        if self.artifacts_removed == 0:
-            print("  ℹ️  No WordPress artifacts found to remove")
-        else:
-            print(f"  📝 WordPress artifacts removed: {self.artifacts_removed}")
-    
-    def print_summary(self):
-        """Print execution summary."""
-        print("\n✅ Static site fixes complete!")
-        print("━" * 46)
-        print("📊 Summary:")
-        print(f"  • Legacy JS files removed: {self.files_removed}")
-        print(f"  • Theme JS files flagged: {self.js_fixed}")
-        print(f"  • HTML files patched: {self.html_patched}")
-        print(f"  • WordPress artifacts removed: {self.artifacts_removed}")
-        print("━" * 46)
-        print()
-        
-        if self.html_patched > 0:
-            print("✨ Navigation fixes applied - fast clicks should now work!")
-        else:
-            print("ℹ️  No HTML files were patched (already correct or no </body> tags)")
-    
-    def run(self):
-        """Execute all fixing steps."""
-        print("🔧 Fixing static site issues (WordPress exports)...")
-        print()
-        
-        try:
-            self.remove_legacy_js()
-            self.check_theme_js()
-            self.inject_navigation_fix()
-            self.cleanup_wordpress_artifacts()
-            self.print_summary()
+            console.print("[yellow]⚠️  No HTML files found[/yellow]")
             return 0
-        except Exception as e:
-            print(f"\n❌ FATAL ERROR: {e}")
-            import traceback
-            traceback.print_exc()
-            return 1
+        
+        console.print(f"\n[cyan]Found {len(html_files)} HTML files[/cyan]\n")
+        
+        # Process with progress bar
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console
+        ) as progress:
+            
+            task = progress.add_task(
+                "[magenta]Processing HTML files...",
+                total=len(html_files)
+            )
+            
+            for html_file in html_files:
+                modified, removed = self.process_html_file(html_file)
+                if modified:
+                    self.files_processed += 1
+                progress.update(task, advance=1)
+        
+        # Summary table
+        table = Table(title="\n📊 Summary", border_style="magenta")
+        table.add_column("Metric", style="cyan", no_wrap=True)
+        table.add_column("Value", style="yellow")
+        
+        table.add_row("HTML files scanned", str(len(html_files)))
+        table.add_row("Files modified", f"[bold]{self.files_processed}[/bold]")
+        table.add_row("Navigation fixes injected", f"[bold]{self.js_injected}[/bold]")
+        table.add_row("Legacy scripts removed", f"[bold]{self.scripts_removed}[/bold]")
+        
+        console.print(table)
+        
+        if self.files_processed == 0:
+            console.print("\n[yellow]ℹ️  No modifications needed[/yellow]")
+        else:
+            console.print(f"\n[green]✨ Successfully fixed {self.files_processed} file(s)![/green]")
+        
+        logger.info(f"Processing complete: {self.files_processed} files modified")
+        return 0
 
 
 if __name__ == "__main__":
-    fixer = StaticSiteFixer()
-    sys.exit(fixer.run())
+    try:
+        fixer = StaticSiteFixer()
+        sys.exit(fixer.run())
+    except KeyboardInterrupt:
+        console.print("\n[red]⚠️  Interrupted by user[/red]")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"\n[red]❌ Fatal error: {e}[/red]")
+        logger.exception("Fatal error")
+        sys.exit(1)
