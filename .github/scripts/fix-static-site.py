@@ -2,8 +2,10 @@
 """Fix static site issues for GitHub Pages deployment."""
 
 import sys
+import shutil
 from pathlib import Path
 from typing import List, Tuple
+import re
 
 # Auto-install dependencies
 try:
@@ -41,55 +43,13 @@ logger.add(lambda msg: None)
 class StaticSiteFixer:
     """Fix static site issues for GitHub Pages."""
     
-    # Navigation fix JavaScript
-    NAVIGATION_FIX_JS = '''<script>
-// Override WordPress navigation for GitHub Pages
-(function() {
-  'use strict';
-  
-  // Intercept all link clicks
-  document.addEventListener('click', function(e) {
-    const link = e.target.closest('a');
-    if (!link) return;
-    
-    const href = link.getAttribute('href');
-    if (!href) return;
-    
-    // Skip external links, anchors, and special protocols
-    if (href.startsWith('http://') || 
-        href.startsWith('https://') || 
-        href.startsWith('//') ||
-        href.startsWith('#') ||
-        href.startsWith('mailto:') ||
-        href.startsWith('tel:')) {
-      return;
+    # Files to skip during restructuring
+    SKIP_RESTRUCTURE = {
+        'index.html',
+        '404.html',
+        'robots.txt',
+        'sitemap.xml',
     }
-    
-    // For internal links, ensure .html extension
-    e.preventDefault();
-    
-    let fixedHref = href;
-    
-    // Remove leading slash if present
-    if (fixedHref.startsWith('/')) {
-      fixedHref = '.' + fixedHref;
-    }
-    
-    // Add .html if no extension present
-    const hasExtension = /\.[a-z0-9]+$/i.test(fixedHref.split('?')[0].split('#')[0]);
-    if (!hasExtension) {
-      const parts = fixedHref.split('#');
-      parts[0] = parts[0].split('?')[0] + '.html' + (fixedHref.includes('?') ? '?' + fixedHref.split('?')[1].split('#')[0] : '');
-      fixedHref = parts.join('#');
-    }
-    
-    // Navigate
-    window.location.href = fixedHref;
-  }, false);
-  
-  console.log('✅ GitHub Pages navigation fix active');
-})();
-</script>'''
     
     # Legacy scripts to remove
     LEGACY_SCRIPTS = [
@@ -104,7 +64,59 @@ class StaticSiteFixer:
         self.files_processed = 0
         self.js_injected = 0
         self.scripts_removed = 0
+        self.files_restructured = 0
         logger.info("StaticSiteFixer initialized")
+    
+    def restructure_files(self, cwd: Path) -> int:
+        """Restructure HTML files: contact.html -> contact/index.html.
+        
+        This fixes GitHub Pages 404 errors for WordPress-style URLs (/contact/)
+        by creating a folder structure compatible with GitHub Pages routing.
+        """
+        console.print("\n[bold cyan]📁 STEP 1: Restructuring file layout...[/bold cyan]")
+        
+        # Find all HTML files in root that need restructuring
+        html_files = [
+            f for f in cwd.glob("*.html")
+            if f.name.lower() not in self.SKIP_RESTRUCTURE
+        ]
+        
+        if not html_files:
+            console.print("[yellow]   No files to restructure[/yellow]")
+            return 0
+        
+        console.print(f"[cyan]   Found {len(html_files)} files to restructure[/cyan]")
+        
+        restructured = 0
+        for html_file in html_files:
+            try:
+                # Get base name without extension
+                base_name = html_file.stem
+                
+                # Create folder
+                folder = cwd / base_name
+                folder.mkdir(exist_ok=True)
+                
+                # Move file to folder as index.html
+                target = folder / "index.html"
+                
+                # Copy file content (not move, to preserve original temporarily)
+                shutil.copy2(html_file, target)
+                
+                # Remove original file
+                html_file.unlink()
+                
+                logger.info(f"Restructured: {html_file.name} -> {base_name}/index.html")
+                console.print(f"   [green]✓[/green] {html_file.name} → {base_name}/index.html")
+                restructured += 1
+                
+            except Exception as e:
+                logger.error(f"Failed to restructure {html_file.name}: {e}")
+                console.print(f"   [red]✗[/red] {html_file.name}: {e}")
+        
+        self.files_restructured = restructured
+        console.print(f"\n[bold green]   ✨ Restructured {restructured} file(s)[/bold green]\n")
+        return restructured
     
     def remove_legacy_scripts(self, soup: BeautifulSoup) -> int:
         """Remove legacy WordPress scripts."""
@@ -135,9 +147,17 @@ class StaticSiteFixer:
             logger.warning("No <body> tag found")
             return False
         
+        # Navigation fix JavaScript - simplified for folder structure
+        nav_fix_js = '''<script>
+// GitHub Pages navigation fix for folder structure
+(function() {
+  console.log('✅ GitHub Pages navigation active');
+})();
+</script>'''
+        
         # Create script tag
         script_tag = soup.new_tag('script')
-        script_tag.string = self.NAVIGATION_FIX_JS.strip()
+        script_tag.string = nav_fix_js.strip()
         
         # Insert before </body>
         body.append(script_tag)
@@ -180,16 +200,21 @@ class StaticSiteFixer:
         """Execute static site fixing with rich UI."""
         # Header
         console.print(Panel.fit(
-            "[bold magenta]🚀 Static Site Fixer[/bold magenta]\n"
+            "[bold magenta]🚀 Static Site Fixer for GitHub Pages[/bold magenta]\n"
             "[yellow]Fixing:[/yellow] WordPress static exports\n"
-            "[green]Actions:[/green] Inject navigation fix, remove legacy scripts",
+            "[green]Actions:[/green] Restructure files, inject nav fix, remove legacy scripts",
             border_style="magenta"
         ))
         
         cwd = Path.cwd()
         logger.info(f"Working directory: {cwd}")
         
-        # Find HTML files
+        # STEP 1: Restructure files BEFORE processing
+        self.restructure_files(cwd)
+        
+        # STEP 2: Find HTML files (after restructuring)
+        console.print("[bold cyan]📝 STEP 2: Processing HTML content...[/bold cyan]")
+        
         html_files = [
             f for f in cwd.rglob("*.html")
             if ".git" not in f.parts and ".github" not in f.parts
@@ -199,7 +224,7 @@ class StaticSiteFixer:
             console.print("[yellow]⚠️  No HTML files found[/yellow]")
             return 0
         
-        console.print(f"\n[cyan]Found {len(html_files)} HTML files[/cyan]\n")
+        console.print(f"[cyan]   Found {len(html_files)} HTML files[/cyan]\n")
         
         # Process with progress bar
         with Progress(
@@ -211,7 +236,7 @@ class StaticSiteFixer:
         ) as progress:
             
             task = progress.add_task(
-                "[magenta]Processing HTML files...",
+                "[magenta]   Processing HTML files...",
                 total=len(html_files)
             )
             
@@ -226,6 +251,7 @@ class StaticSiteFixer:
         table.add_column("Metric", style="cyan", no_wrap=True)
         table.add_column("Value", style="yellow")
         
+        table.add_row("Files restructured", f"[bold]{self.files_restructured}[/bold]")
         table.add_row("HTML files scanned", str(len(html_files)))
         table.add_row("Files modified", f"[bold]{self.files_processed}[/bold]")
         table.add_row("Navigation fixes injected", f"[bold]{self.js_injected}[/bold]")
@@ -233,12 +259,14 @@ class StaticSiteFixer:
         
         console.print(table)
         
-        if self.files_processed == 0:
-            console.print("\n[yellow]ℹ️  No modifications needed[/yellow]")
-        else:
-            console.print(f"\n[green]✨ Successfully fixed {self.files_processed} file(s)![/green]")
+        if self.files_restructured > 0:
+            console.print(f"\n[green]✨ Successfully restructured {self.files_restructured} files for GitHub Pages![/green]")
+            console.print("[green]   URLs like /contact/ will now work correctly[/green]")
         
-        logger.info(f"Processing complete: {self.files_processed} files modified")
+        if self.files_processed > 0:
+            console.print(f"[green]✨ Processed {self.files_processed} HTML file(s)[/green]")
+        
+        logger.info(f"Processing complete: {self.files_restructured} restructured, {self.files_processed} modified")
         return 0
 
 
