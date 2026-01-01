@@ -135,47 +135,71 @@ for file in $HTML_FILES; do
   #   href="./services#about" → href="./services.html#about"
   #   href="./services.html" → href="./services.html" (unchanged)
   
-  # Strategy: Find hrefs without extensions and add .html before query/anchor
+  # Create a temporary Python script for complex regex
+  python3 - "$file" <<'PYTHON_EOF'
+import sys
+import re
+
+filename = sys.argv[1]
+
+with open(filename, 'r', encoding='utf-8', errors='ignore') as f:
+    content = f.read()
+
+# Pattern to add .html before query strings or anchors
+# Matches: href="path" or href="path?query" or href="path#anchor"
+# But NOT: href="path.ext" or href="http://" or href="#anchor"
+
+def add_html_extension(match):
+    quote = match.group(1)  # " or '
+    prefix = match.group(2) or ''  # Optional ./ or nothing
+    path = match.group(3)  # The actual path
+    suffix = match.group(4) or ''  # Optional ?query or #anchor
+    
+    # Skip if path already has an extension
+    if '.' in path.split('/')[-1]:
+        return match.group(0)  # Return unchanged
+    
+    # Skip if it's just an anchor
+    if not path:
+        return match.group(0)
+    
+    # Skip external URLs
+    if path.startswith('http://') or path.startswith('https://') or path.startswith('//'):
+        return match.group(0)
+    
+    # Add .html before query/anchor
+    return f'href={quote}{prefix}{path}.html{suffix}{quote}'
+
+# Match href="path" or href="path?query" or href="path#anchor"
+# Supports both " and '
+pattern = r'href=(["\'])((\./)?([a-zA-Z0-9/_-]+))(\?[^"\']*)?(#[^"\']*)?(\1)'
+
+def process_href(match):
+    quote = match.group(1)
+    prefix = match.group(2) or ''
+    path_part = match.group(4)
+    query = match.group(5) or ''
+    anchor = match.group(6) or ''
+    
+    # Skip if already has extension
+    if '.' in path_part.split('/')[-1]:
+        return match.group(0)
+    
+    # Skip external/special
+    if not path_part or path_part.startswith('http'):
+        return match.group(0)
+    
+    return f'href={quote}{prefix}{path_part}.html{query}{anchor}{quote}'
+
+content = re.sub(pattern, process_href, content)
+
+with open(filename, 'w', encoding='utf-8', errors='ignore') as f:
+    f.write(content)
+
+PYTHON_EOF
   
-  # Pattern: href="(path)(?query)(#anchor)"
-  # Transform to: href="(path).html(?query)(#anchor)"
-  
-  # For double-quoted hrefs: href="path" or href="path?query" or href="path#anchor"
-  # Match pattern: href="(./)?[a-zA-Z0-9/_-]+" followed by optional ? or #
-  # But NOT if path already contains a dot (extension)
-  
-  if grep -qE 'href="(\./)?[a-zA-Z0-9/_-]+([?#]|")' "$file" 2>/dev/null; then
-    # Step 1: Add .html to paths without extensions
-    # Match: href="path" or href="path?" or href="path#"
-    # But NOT: href="path.ext" or href="path.ext?" or href="path.ext#"
-    
-    # Transform: href="services?tab=1" → href="services.html?tab=1"
-    sed -i -E 's|href="((\./)?([a-zA-Z0-9/_-]+))(\?[^"]*)?"|href="\1.html\4"|g' "$file"
-    sed -i -E 's|href="((\./)?([a-zA-Z0-9/_-]+))(#[^"]*)?"|href="\1.html\4"|g' "$file"
-    
-    # Step 2: Clean up files that already had extensions
-    # Pattern: href="file.ext.html" → href="file.ext"
-    sed -i -E 's|href="([^"]*)\.(xml|css|js|json|svg|png|jpg|jpeg|gif|webp|woff|woff2|txt|pdf|zip|ico)\.html"|href="\1.\2"|g' "$file"
-    
-    # Step 3: Fix double .html.html
-    sed -i 's|\.html\.html|.html|g' "$file"
-    
-    # Step 4: Fix cases where .html was in the middle
-    sed -i -E 's|href="([^"]*\.html)\.html"|href="\1"|g' "$file"
-    
-    echo "    ✓ Added .html extension to page links (preserving queries/anchors)"
-    MODIFIED=1
-  fi
-  
-  # Same for single-quoted hrefs
-  if grep -qE "href='(\./)?[a-zA-Z0-9/_-]+([?#]|')" "$file" 2>/dev/null; then
-    sed -i -E "s|href='((\./)?([a-zA-Z0-9/_-]+))(\?[^']*)?'|href='\1.html\4'|g" "$file"
-    sed -i -E "s|href='((\./)?([a-zA-Z0-9/_-]+))(#[^']*)?'|href='\1.html\4'|g" "$file"
-    
-    sed -i -E "s|href='([^']*)\.(xml|css|js|json|svg|png|jpg|jpeg|gif|webp|woff|woff2|txt|pdf|zip|ico)\.html'|href='\1.\2'|g" "$file"
-    sed -i "s|\.html\.html|.html|g" "$file"
-    sed -i -E "s|href='([^']*\.html)\.html'|href='\1'|g" "$file"
-    
+  if [ $? -eq 0 ]; then
+    echo "    ✓ Added .html extension to page links (Python)"
     MODIFIED=1
   fi
   
