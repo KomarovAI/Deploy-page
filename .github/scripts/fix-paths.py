@@ -51,14 +51,39 @@ class PathFixer:
         logger.info(f"PathFixer initialized with base_href={base_href}")
         
     def should_add_html_extension(self, path: str) -> bool:
-        """Check if path needs .html extension."""
-        filename = path.split('/')[-1].split('?')[0].split('#')[0]
+        """Check if path needs .html extension.
+        
+        CRITICAL: Don't add .html to directory paths!
+        
+        Examples:
+            /sectors/bars-pubs/ -> NO (directory path)
+            /contact/ -> NO (directory path)
+            /about -> YES (file without extension)
+            /contact -> YES (file without extension)
+        """
+        # Remove query and fragment
+        clean_path = path.split('?')[0].split('#')[0]
+        
+        # If ends with / it's a directory - NO .html
+        if clean_path.endswith('/'):
+            return False
+        
+        # Extract filename
+        filename = clean_path.split('/')[-1]
+        
+        # If has extension - NO .html
         if '.' in filename:
             return False
         
-        if not path or path.startswith(('http://', 'https://', '//', '#')):
+        # External URLs - NO
+        if path.startswith(('http://', 'https://', '//', '#')):
             return False
         
+        # Empty path - NO
+        if not path:
+            return False
+        
+        # It's a file without extension - YES
         return True
     
     def fix_url(self, url: str, attr_type: str = "href") -> str:
@@ -87,7 +112,7 @@ class PathFixer:
             parsed = urlparse(url)
             logger.debug(f"Fixed root-relative: {original_url} → {url}")
         
-        # Add .html extension
+        # Add .html extension ONLY to files, NOT directories
         if attr_type == "href" and self.should_add_html_extension(parsed.path):
             base_path = parsed.path.split('?', 1)[0].split('#', 1)[0]
             
@@ -191,7 +216,8 @@ class PathFixer:
         console.print(Panel.fit(
             "[bold cyan]🔧 GitHub Pages Path Fixer[/bold cyan]\n"
             f"[yellow]BASE_HREF:[/yellow] {self.base_href or '/'}\n"
-            "[green]Using:[/green] BeautifulSoup + lxml (fast!)",
+            "[green]Using:[/green] BeautifulSoup + lxml (fast!)\n"
+            "[magenta]New:[/magenta] Smart .html detection (no directories)",
             border_style="cyan"
         ))
         
@@ -261,6 +287,7 @@ class PathFixer:
             console.print("\n[yellow]ℹ️  All files were already correct[/yellow]")
         else:
             console.print(f"\n[green]✨ Successfully updated {self.files_modified} file(s)![/green]")
+            console.print("[green]   Directory paths preserved (no .html added)[/green]")
         
         logger.info(f"Processing complete: {self.files_modified} files modified, {self.total_changes} changes")
         return 0
