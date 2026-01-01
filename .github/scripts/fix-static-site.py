@@ -23,6 +23,14 @@ except ImportError:
 class StaticSiteFixer:
     """Fix static site issues for GitHub Pages."""
     
+    # ═══════════════════════════════════════════════════════════════════
+    # CRITICAL: GitHub Pages base path configuration
+    # ═══════════════════════════════════════════════════════════════════
+    # For repository: https://github.com/KomarovAI/archived-sites
+    # Hosted at: https://komarovai.github.io/archived-sites/
+    # Base path MUST match repository name
+    BASE_PATH = "/archived-sites"
+    
     # Files to skip during restructuring
     SKIP_RESTRUCTURE = {
         'index.html',
@@ -55,7 +63,53 @@ class StaticSiteFixer:
         self.files_restructured = 0
         self.links_fixed = 0
         self.resources_fixed = 0
+        self.absolute_paths_fixed = 0
         self.restructure_map: Dict[str, str] = {}  # old_name -> new_path
+    
+    def is_external_url(self, url: str) -> bool:
+        """Check if URL is external (absolute URL with protocol).
+        
+        Examples:
+            ✅ https://example.com → True
+            ✅ http://example.com → True
+            ✅ //cdn.example.com → True
+            ❌ /wp-content/... → False
+            ❌ wp-content/... → False
+        """
+        return (
+            url.startswith('http://') or
+            url.startswith('https://') or
+            url.startswith('//')
+        )
+    
+    def fix_absolute_path(self, path: str) -> str:
+        """Fix absolute path by adding base path prefix.
+        
+        CRITICAL FIX for GitHub Pages subdirectory hosting.
+        
+        Examples:
+            /wp-content/... → /archived-sites/wp-content/...
+            /wp-includes/... → /archived-sites/wp-includes/...
+            https://... → https://... (unchanged)
+            wp-content/... → wp-content/... (unchanged, relative)
+        
+        Args:
+            path: Original path from HTML
+        
+        Returns:
+            Fixed path with base path prefix if needed
+        """
+        # Skip external URLs
+        if self.is_external_url(path):
+            return path
+        
+        # Fix root-relative paths (starting with /)
+        if path.startswith('/'):
+            # Avoid double-prefixing
+            if not path.startswith(self.BASE_PATH + '/'):
+                return self.BASE_PATH + path
+        
+        return path
     
     def detect_directory_structure(self, filename: str) -> Optional[Tuple[str, str]]:
         """Detect directory structure from flattened filename.
@@ -163,7 +217,7 @@ class StaticSiteFixer:
                     # DETAILED OUTPUT - показываем каждую страницу
                     print(f"   ✓ {old_structure}")
                     print(f"     → {new_structure}")
-                    print(f"     🌐 URL: /{new_path}")
+                    print(f"     🌐 URL: {self.BASE_PATH}/{new_path}")
                     print()
                     
                     restructured += 1
@@ -204,7 +258,7 @@ class StaticSiteFixer:
                     # DETAILED OUTPUT - показываем каждую страницу
                     print(f"   ✓ {old_structure}")
                     print(f"     → {new_structure}")
-                    print(f"     🌐 URL: /{new_path}")
+                    print(f"     🌐 URL: {self.BASE_PATH}/{new_path}")
                     print()
                     
                     restructured += 1
@@ -218,58 +272,116 @@ class StaticSiteFixer:
         return restructured
     
     def fix_resource_paths(self, soup: BeautifulSoup, depth: int) -> int:
-        """Fix relative paths to CSS/JS/images after restructuring.
+        """Fix relative AND absolute paths to CSS/JS/images after restructuring.
         
-        CRITICAL FIX: Convert relative paths to work from subdirectories.
+        CRITICAL FIX: 
+        1. Convert relative paths to work from subdirectories
+        2. Add base path prefix to absolute paths
         
         Args:
             soup: BeautifulSoup parsed HTML
             depth: Folder nesting depth (news-insights/ = 1, sectors/bars/ = 2)
         
         Examples:
-            depth=1: wp-content/... → ../wp-content/...
-            depth=2: wp-content/... → ../../wp-content/...
+            Relative (depth=1):
+                wp-content/... → ../wp-content/...
+            
+            Relative (depth=2):
+                wp-content/... → ../../wp-content/...
+            
+            Absolute:
+                /wp-content/... → /archived-sites/wp-content/...
+                /wp-includes/... → /archived-sites/wp-includes/...
         
         Returns:
             Number of resources fixed
         """
-        if depth == 0:
-            return 0
-        
         fixed = 0
-        prefix = "../" * depth
+        prefix = "../" * depth if depth > 0 else ""
         
         # Fix CSS links
         for tag in soup.find_all('link', href=True):
             href = tag['href']
-            if href.startswith('wp-content/') or href.startswith('wp-includes/'):
-                tag['href'] = prefix + href
-                fixed += 1
+            
+            if self.is_external_url(href):
+                continue
+            
+            # Fix absolute paths
+            if href.startswith('/'):
+                new_href = self.fix_absolute_path(href)
+                if new_href != href:
+                    tag['href'] = new_href
+                    self.absolute_paths_fixed += 1
+                    fixed += 1
+            # Fix relative paths
+            elif href.startswith('wp-content/') or href.startswith('wp-includes/'):
+                if depth > 0:
+                    tag['href'] = prefix + href
+                    fixed += 1
         
         # Fix JS scripts
         for tag in soup.find_all('script', src=True):
             src = tag['src']
-            if src.startswith('wp-content/') or src.startswith('wp-includes/'):
-                tag['src'] = prefix + src
-                fixed += 1
+            
+            if self.is_external_url(src):
+                continue
+            
+            # Fix absolute paths
+            if src.startswith('/'):
+                new_src = self.fix_absolute_path(src)
+                if new_src != src:
+                    tag['src'] = new_src
+                    self.absolute_paths_fixed += 1
+                    fixed += 1
+            # Fix relative paths
+            elif src.startswith('wp-content/') or src.startswith('wp-includes/'):
+                if depth > 0:
+                    tag['src'] = prefix + src
+                    fixed += 1
         
         # Fix images
         for tag in soup.find_all('img', src=True):
             src = tag['src']
-            if src.startswith('wp-content/'):
-                tag['src'] = prefix + src
-                fixed += 1
+            
+            if self.is_external_url(src):
+                continue
+            
+            # Fix absolute paths
+            if src.startswith('/'):
+                new_src = self.fix_absolute_path(src)
+                if new_src != src:
+                    tag['src'] = new_src
+                    self.absolute_paths_fixed += 1
+                    fixed += 1
+            # Fix relative paths
+            elif src.startswith('wp-content/'):
+                if depth > 0:
+                    tag['src'] = prefix + src
+                    fixed += 1
         
         # Fix background images in style attributes
         for tag in soup.find_all(style=True):
             style = tag['style']
-            if 'wp-content/' in style:
-                # Replace url(wp-content/...) with url(../wp-content/...)
-                tag['style'] = re.sub(
+            modified_style = style
+            
+            # Fix relative paths: url(wp-content/...)
+            if 'wp-content/' in style and depth > 0:
+                modified_style = re.sub(
                     r'url\(\s*(["\']?)wp-content/',
                     f'url(\\1{prefix}wp-content/',
-                    style
+                    modified_style
                 )
+            
+            # Fix absolute paths: url(/wp-content/...)
+            # Match url(/...) but NOT url(https://...) or url(//...)
+            modified_style = re.sub(
+                r'url\(\s*(["\']?)/(?!/)(?!https?:)',
+                f'url(\\1{self.BASE_PATH}/',
+                modified_style
+            )
+            
+            if modified_style != style:
+                tag['style'] = modified_style
                 fixed += 1
         
         return fixed
@@ -281,6 +393,10 @@ class StaticSiteFixer:
             sectorsbars-pubs.html -> sectors/bars-pubs/
             servicesdesign.html -> services/design/
             news-insights.html -> news-insights/
+        
+        Also fixes absolute paths in navigation:
+            /services/ → /archived-sites/services/
+            /about/ → /archived-sites/about/
         """
         if not self.restructure_map:
             return 0
@@ -302,12 +418,30 @@ class StaticSiteFixer:
                 for tag in soup.find_all('a', href=True):
                     href = tag['href']
                     
-                    # Check if href matches old filename
+                    if self.is_external_url(href):
+                        continue
+                    
+                    # Fix old filenames (restructure map)
                     for old_name, new_path in self.restructure_map.items():
                         if href == old_name or href == f"./{old_name}" or href.endswith(f"/{old_name}"):
                             tag['href'] = new_path
                             modified = True
                             self.links_fixed += 1
+                            break
+                    
+                    # Fix absolute internal links
+                    if href.startswith('/') and not href.startswith(self.BASE_PATH):
+                        # Skip anchors (#) and query strings (?)
+                        if '#' in href or '?' in href:
+                            # Preserve anchors/queries
+                            base_href = href.split('#')[0].split('?')[0]
+                            suffix = href[len(base_href):]
+                            tag['href'] = self.BASE_PATH + base_href + suffix
+                        else:
+                            tag['href'] = self.BASE_PATH + href
+                        
+                        modified = True
+                        self.absolute_paths_fixed += 1
                 
                 if modified:
                     html_file.write_text(str(soup), encoding="utf-8")
@@ -345,11 +479,11 @@ class StaticSiteFixer:
             return False
         
         # Navigation fix JavaScript
-        nav_fix_js = '''<script>
-// GitHub Pages navigation fix
-(function() {
-  console.log('✅ GitHub Pages navigation active');
-})();
+        nav_fix_js = f'''<script>
+// GitHub Pages navigation fix for {self.BASE_PATH}
+(function() {{
+  console.log('✅ GitHub Pages navigation active: {self.BASE_PATH}');
+}})();
 </script>'''
         
         # Create script tag
@@ -413,13 +547,16 @@ class StaticSiteFixer:
         """Execute static site fixing with verbose restructure, compact other steps."""
         cwd = Path.cwd()
         
+        print(f"\n🔧 BASE PATH: {self.BASE_PATH}")
+        print(f"🌐 Site URL: https://komarovai.github.io{self.BASE_PATH}/\n")
+        
         # STEP 1: Restructure files (VERBOSE)
         self.restructure_files(cwd)
         
         # STEP 2: Fix internal links after restructuring (COMPACT)
         fixed_files = self.fix_internal_links(cwd)
-        if self.links_fixed > 0:
-            print(f"✅ Fixed {self.links_fixed} internal links in {fixed_files} files\n")
+        if self.links_fixed > 0 or self.absolute_paths_fixed > 0:
+            print(f"✅ Fixed {self.links_fixed} restructured links + {self.absolute_paths_fixed} absolute paths in {fixed_files} files\n")
         
         # STEP 3: Find HTML files (after restructuring) (COMPACT)
         html_files = [
@@ -439,10 +576,13 @@ class StaticSiteFixer:
         
         # Compact summary for processing
         if self.resources_fixed > 0:
-            print(f"✅ Fixed {self.resources_fixed} resource paths (CSS/JS/images)\n")
+            print(f"✅ Fixed {self.resources_fixed} resource paths (relative + absolute)\n")
         
         if self.scripts_removed > 0:
             print(f"✅ Removed {self.scripts_removed} legacy scripts from {self.files_processed} files\n")
+        
+        if self.absolute_paths_fixed > 0:
+            print(f"✅ CRITICAL FIX: {self.absolute_paths_fixed} absolute paths converted to {self.BASE_PATH}/...\n")
         
         return 0
 
