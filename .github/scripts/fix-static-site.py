@@ -68,17 +68,21 @@ class StaticSiteFixer:
         logger.info("StaticSiteFixer initialized")
     
     def restructure_files(self, cwd: Path) -> int:
-        """Restructure HTML files: contact.html -> contact/index.html.
+        """Restructure HTML files: sectors/bars-pubs.html -> sectors/bars-pubs/index.html.
         
-        This fixes GitHub Pages 404 errors for WordPress-style URLs (/contact/)
+        This fixes GitHub Pages 404 errors for WordPress-style URLs (/sectors/bars-pubs/)
         by creating a folder structure compatible with GitHub Pages routing.
+        
+        Handles both root-level and nested HTML files while preserving directory structure.
         """
         console.print("\n[bold cyan]📁 STEP 1: Restructuring file layout...[/bold cyan]")
         
-        # Find all HTML files in root that need restructuring
+        # Find all HTML files recursively, excluding .git and .github
         html_files = [
-            f for f in cwd.glob("*.html")
+            f for f in cwd.rglob("**/*.html")
             if f.name.lower() not in self.SKIP_RESTRUCTURE
+            and ".git" not in f.parts
+            and ".github" not in f.parts
         ]
         
         if not html_files:
@@ -90,24 +94,32 @@ class StaticSiteFixer:
         restructured = 0
         for html_file in html_files:
             try:
-                # Get base name without extension
+                # Get relative path from cwd
+                rel_path = html_file.relative_to(cwd)
+                
+                # Get parent directory and base name
+                parent_dir = rel_path.parent
                 base_name = html_file.stem
                 
-                # Create folder
-                folder = cwd / base_name
-                folder.mkdir(exist_ok=True)
+                # Create target folder: parent/base_name/
+                target_folder = cwd / parent_dir / base_name
+                target_folder.mkdir(parents=True, exist_ok=True)
                 
-                # Move file to folder as index.html
-                target = folder / "index.html"
+                # Target file: parent/base_name/index.html
+                target_file = target_folder / "index.html"
                 
-                # Copy file content (not move, to preserve original temporarily)
-                shutil.copy2(html_file, target)
+                # Copy file content
+                shutil.copy2(html_file, target_file)
                 
                 # Remove original file
                 html_file.unlink()
                 
-                logger.info(f"Restructured: {html_file.name} -> {base_name}/index.html")
-                console.print(f"   [green]✓[/green] {html_file.name} → {base_name}/index.html")
+                # Show relative paths in output
+                old_path = str(rel_path)
+                new_path = str(target_file.relative_to(cwd))
+                
+                logger.info(f"Restructured: {old_path} -> {new_path}")
+                console.print(f"   [green]✓[/green] {old_path} → {new_path}")
                 restructured += 1
                 
             except Exception as e:
@@ -261,7 +273,7 @@ class StaticSiteFixer:
         
         if self.files_restructured > 0:
             console.print(f"\n[green]✨ Successfully restructured {self.files_restructured} files for GitHub Pages![/green]")
-            console.print("[green]   URLs like /contact/ will now work correctly[/green]")
+            console.print("[green]   URLs like /sectors/bars-pubs/ will now work correctly[/green]")
         
         if self.files_processed > 0:
             console.print(f"[green]✨ Processed {self.files_processed} HTML file(s)[/green]")
