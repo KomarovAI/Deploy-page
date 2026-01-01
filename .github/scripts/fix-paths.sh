@@ -134,43 +134,60 @@ for file in $HTML_FILES; do
   fi
   
   # 3. Add .html extension to internal page links (GitHub Pages fix)
-  # Match: href="./something" or href="something" where:
-  # - NOT already ending with .html, .htm, .xml, .txt, .css, .js, .json
-  # - NOT a directory path (ending with /)
-  # - NOT an anchor (containing #)
-  # - NOT external (containing http:// or https://)
-  # - NOT a resource file (.jpg, .png, .svg, .gif, .webp, .woff, .woff2, etc.)
+  # CRITICAL FIX: Only add .html to hrefs that DON'T already have any file extension
+  # Match patterns like:
+  #   href="./page-name"
+  #   href="page-name"
+  #   href="./folder/page-name"
+  # But EXCLUDE:
+  #   href="./page.html" (already has .html)
+  #   href="./file.xml" (has extension)
+  #   href="./path/" (directory)
+  #   href="#anchor" (anchor)
+  #   href="http://..." (external)
   
-  if grep -qE 'href="(\./)?[a-zA-Z0-9_-]+"' "$file" 2>/dev/null; then
-    # Add .html to internal page links that don't have extensions
-    # Pattern: href="./word" or href="word" → href="./word.html" or href="word.html"
-    # Exclude if already has extension or ends with /
+  # Strategy: Match href values that:
+  # 1. Optionally start with ./
+  # 2. Contain path segments (letters, numbers, -, _, /)
+  # 3. End WITHOUT a dot followed by extension
+  # 4. Are not just a directory (don't end with /)
+  
+  # Pattern explanation:
+  # href="(\./)?          - Optional ./ prefix
+  # ([a-zA-Z0-9/_-]+)     - Path segments (can include /)
+  # "                     - Closing quote
+  # (?![^<]*\.)           - Negative lookahead: no dot before next <
+  # This prevents matching href="something.ext"
+  
+  # For double-quoted hrefs without extensions
+  if grep -qE 'href="(\./)?[a-zA-Z0-9/_-]+"' "$file" 2>/dev/null; then
+    # Only add .html if the href doesn't already contain a dot (indicating an extension)
+    # This regex matches href="path" or href="./path" but NOT href="path.html" or href="./path.xml"
+    sed -i -E 's|href="((\./)?([a-zA-Z0-9/_-]+))"|href="\1.html"|g' "$file"
     
-    # For double-quoted hrefs
-    sed -i -E 's/href="(\.\/)?([a-zA-Z0-9_-]+)"([^>]*>)/href="\1\2.html"\3/g' "$file"
+    # Now remove .html from any that already had extensions (safeguard)
+    # If we accidentally added .html to something.xml, fix it back
+    sed -i -E 's|href="([^"]*)\.(xml|css|js|json|svg|png|jpg|jpeg|gif|webp|woff|woff2|txt|pdf|zip|ico)\.html"|href="\1.\2"|g' "$file"
     
-    # For single-quoted hrefs
-    sed -i -E "s/href='(\.\/)?([a-zA-Z0-9_-]+)'([^>]*>)/href='\1\2.html'\3/g" "$file"
+    # Also handle .html.html case (double application)
+    sed -i 's|\.html\.html"|.html"|g' "$file"
     
-    # Remove .html.html if accidentally doubled
-    sed -i 's/\.html\.html/.html/g' "$file"
+    # Handle cases where path already contains .html in the middle (like sectors/bars-pubs.html)
+    # Pattern: if there's .html somewhere before the quote, don't add another .html at the end
+    # This is a cleanup step: href="path.html.html" → href="path.html"
+    sed -i -E 's|href="([^"]*\.html)\.html"|href="\1"|g' "$file"
+  fi
+  
+  # For single-quoted hrefs without extensions
+  if grep -qE "href='(\./)?[a-zA-Z0-9/_-]+'" "$file" 2>/dev/null; then
+    sed -i -E "s|href='((\./)?([a-zA-Z0-9/_-]+))'|href='\1.html'|g" "$file"
     
-    # Don't add .html to paths that already have other extensions
-    sed -i -E 's/\.xml\.html/.xml/g' "$file"
-    sed -i -E 's/\.css\.html/.css/g' "$file"
-    sed -i -E 's/\.js\.html/.js/g' "$file"
-    sed -i -E 's/\.json\.html/.json/g' "$file"
-    sed -i -E 's/\.svg\.html/.svg/g' "$file"
-    sed -i -E 's/\.png\.html/.png/g' "$file"
-    sed -i -E 's/\.jpg\.html/.jpg/g' "$file"
-    sed -i -E 's/\.jpeg\.html/.jpeg/g' "$file"
-    sed -i -E 's/\.gif\.html/.gif/g' "$file"
-    sed -i -E 's/\.webp\.html/.webp/g' "$file"
-    sed -i -E 's/\.woff\.html/.woff/g' "$file"
-    sed -i -E 's/\.woff2\.html/.woff2/g' "$file"
-    sed -i -E 's/\.txt\.html/.txt/g' "$file"
+    # Cleanup for single quotes
+    sed -i -E "s|href='([^']*)\.(xml|css|js|json|svg|png|jpg|jpeg|gif|webp|woff|woff2|txt|pdf|zip|ico)\.html'|href='\1.\2'|g" "$file"
+    sed -i "s|\.html\.html'|.html'|g" "$file"
+    sed -i -E "s|href='([^']*\.html)\.html'|href='\1'|g" "$file"
     
-    echo "    ✓ Added .html extension to internal page links"
+    echo "    ✓ Added .html extension to internal page links (if needed)"
     MODIFIED=1
     TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + 1))
   fi
