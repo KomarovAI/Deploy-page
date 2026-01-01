@@ -4,7 +4,7 @@
 import sys
 import shutil
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 import re
 
 # Auto-install dependencies
@@ -73,6 +73,8 @@ class StaticSiteFixer:
         self.js_injected = 0
         self.scripts_removed = 0
         self.files_restructured = 0
+        self.links_fixed = 0
+        self.restructure_map: Dict[str, str] = {}  # old_name -> new_path
         logger.info("StaticSiteFixer initialized")
     
     def detect_directory_structure(self, filename: str) -> Optional[Tuple[str, str]]:
@@ -158,6 +160,12 @@ class StaticSiteFixer:
                     # Remove original file
                     html_file.unlink()
                     
+                    old_name = html_file.name  # e.g., sectorsbars-pubs.html
+                    new_path = f"{dir_prefix}/{file_base}/"  # e.g., sectors/bars-pubs/
+                    
+                    # Store mapping for link fixing
+                    self.restructure_map[old_name] = new_path
+                    
                     old_structure = str(rel_path)
                     new_structure = str(target_file.relative_to(cwd))
                     
@@ -189,6 +197,12 @@ class StaticSiteFixer:
                     # Remove original file
                     html_file.unlink()
                     
+                    old_name = html_file.name  # e.g., contact.html
+                    new_path = f"{base_name}/"  # e.g., contact/
+                    
+                    # Store mapping
+                    self.restructure_map[old_name] = new_path
+                    
                     old_structure = str(rel_path)
                     new_structure = str(target_file.relative_to(cwd))
                     
@@ -203,6 +217,53 @@ class StaticSiteFixer:
         self.files_restructured = restructured
         console.print(f"\n[bold green]   ✨ Restructured {restructured} file(s)[/bold green]\n")
         return restructured
+    
+    def fix_internal_links(self, cwd: Path) -> int:
+        """Fix internal links after restructuring.
+        
+        Updates links like:
+            sectorsbars-pubs.html -> sectors/bars-pubs/
+            servicesdesign.html -> services/design/
+        """
+        if not self.restructure_map:
+            return 0
+        
+        console.print("[bold cyan]🔗 STEP 2: Fixing internal links...[/bold cyan]")
+        
+        html_files = [
+            f for f in cwd.rglob("*.html")
+            if ".git" not in f.parts and ".github" not in f.parts
+        ]
+        
+        fixed_count = 0
+        
+        for html_file in html_files:
+            try:
+                content = html_file.read_text(encoding="utf-8", errors="ignore")
+                soup = BeautifulSoup(content, "lxml")
+                modified = False
+                
+                # Fix <a href="...">
+                for tag in soup.find_all('a', href=True):
+                    href = tag['href']
+                    
+                    # Check if href matches old filename
+                    for old_name, new_path in self.restructure_map.items():
+                        if href == old_name or href == f"./{old_name}" or href.endswith(f"/{old_name}"):
+                            tag['href'] = new_path
+                            modified = True
+                            self.links_fixed += 1
+                            logger.debug(f"{html_file.name}: {href} -> {new_path}")
+                
+                if modified:
+                    html_file.write_text(str(soup), encoding="utf-8")
+                    fixed_count += 1
+                    
+            except Exception as e:
+                logger.error(f"Failed to fix links in {html_file.name}: {e}")
+        
+        console.print(f"[green]   ✓ Fixed {self.links_fixed} links in {fixed_count} files[/green]\n")
+        return fixed_count
     
     def remove_legacy_scripts(self, soup: BeautifulSoup) -> int:
         """Remove legacy WordPress scripts."""
@@ -288,18 +349,21 @@ class StaticSiteFixer:
         console.print(Panel.fit(
             "[bold magenta]🚀 Static Site Fixer for GitHub Pages[/bold magenta]\n"
             "[yellow]Fixing:[/yellow] WordPress static exports\n"
-            "[green]Actions:[/green] Restore & restructure files, inject nav fix, remove legacy scripts",
+            "[green]Actions:[/green] Restructure files, fix links, inject nav, remove legacy scripts",
             border_style="magenta"
         ))
         
         cwd = Path.cwd()
         logger.info(f"Working directory: {cwd}")
         
-        # STEP 1: Restructure files BEFORE processing
+        # STEP 1: Restructure files
         self.restructure_files(cwd)
         
-        # STEP 2: Find HTML files (after restructuring)
-        console.print("[bold cyan]📝 STEP 2: Processing HTML content...[/bold cyan]")
+        # STEP 2: Fix internal links after restructuring
+        self.fix_internal_links(cwd)
+        
+        # STEP 3: Find HTML files (after restructuring)
+        console.print("[bold cyan]📝 STEP 3: Processing HTML content...[/bold cyan]")
         
         html_files = [
             f for f in cwd.rglob("*.html")
@@ -338,6 +402,7 @@ class StaticSiteFixer:
         table.add_column("Value", style="yellow")
         
         table.add_row("Files restructured", f"[bold]{self.files_restructured}[/bold]")
+        table.add_row("Internal links fixed", f"[bold]{self.links_fixed}[/bold]")
         table.add_row("HTML files scanned", str(len(html_files)))
         table.add_row("Files modified", f"[bold]{self.files_processed}[/bold]")
         table.add_row("Navigation fixes injected", f"[bold]{self.js_injected}[/bold]")
@@ -349,10 +414,13 @@ class StaticSiteFixer:
             console.print(f"\n[green]✨ Successfully restructured {self.files_restructured} files for GitHub Pages![/green]")
             console.print("[green]   URLs like /sectors/bars-pubs/ will now work correctly[/green]")
         
+        if self.links_fixed > 0:
+            console.print(f"[green]✨ Fixed {self.links_fixed} internal links[/green]")
+        
         if self.files_processed > 0:
             console.print(f"[green]✨ Processed {self.files_processed} HTML file(s)[/green]")
         
-        logger.info(f"Processing complete: {self.files_restructured} restructured, {self.files_processed} modified")
+        logger.info(f"Processing complete: {self.files_restructured} restructured, {self.links_fixed} links fixed, {self.files_processed} modified")
         return 0
 
 
