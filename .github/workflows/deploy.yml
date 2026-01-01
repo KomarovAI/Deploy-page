@@ -255,12 +255,12 @@ jobs:
           echo "Fixing paths for GitHub Pages..."
           echo "Using BASE_HREF: ${BASE_HREF}"
           
-          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.sh" ]; then
-            echo "fix-paths.sh script not found"
+          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.py" ]; then
+            echo "fix-paths.py script not found"
             exit 1
           fi
           
-          if ! bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.sh"; then
+          if ! python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.py"; then
             echo "Path fixing failed - rolling back"
             git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
             exit 1
@@ -275,13 +275,10 @@ jobs:
           set -e
           echo "Applying static site fixes..."
           
-          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.sh" ]; then
-            echo "⚠️ fix-static-site.sh not found, skipping static site fixes"
+          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py" ]; then
+            echo "⚠️ fix-static-site.py not found, skipping static site fixes"
           else
-            # Make script executable
-            chmod +x "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.sh"
-            
-            if ! bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.sh"; then
+            if ! python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py"; then
               echo "Static site fixing failed - rolling back"
               git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
               exit 1
@@ -298,10 +295,10 @@ jobs:
         run: |
           echo "Validating deployment..."
           
-          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.sh" ]; then
-            echo "validate-deploy.sh not found, skipping validation"
+          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py" ]; then
+            echo "validate-deploy.py not found, skipping validation"
           else
-            if ! bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.sh"; then
+            if ! python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py"; then
               echo "Validation failed - rolling back"
               git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
               exit 1
