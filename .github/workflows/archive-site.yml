@@ -1,0 +1,103 @@
+name: Archive Website
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Website URL to archive'
+        required: true
+        type: string
+      depth:
+        description: 'Crawl depth (0-3)'
+        required: false
+        default: '2'
+        type: choice
+        options:
+          - '0'
+          - '1'
+          - '2'
+          - '3'
+      branch:
+        description: 'Target branch for archived content'
+        required: false
+        default: 'archived-sites'
+        type: string
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r scripts/requirements.txt
+      
+      - name: Archive website
+        id: archive
+        run: |
+          python scripts/archive_site.py "${{ inputs.url }}" \
+            --output archived_sites \
+            --depth ${{ inputs.depth }}
+          
+          # Extract domain for commit message
+          DOMAIN=$(python -c "from urllib.parse import urlparse; print(urlparse('${{ inputs.url }}').netloc)")
+          echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
+      
+      - name: Create/switch to archive branch
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          
+          # Try to checkout existing branch or create new
+          git fetch origin ${{ inputs.branch }} 2>/dev/null || true
+          git checkout ${{ inputs.branch }} 2>/dev/null || git checkout -b ${{ inputs.branch }}
+      
+      - name: Commit archived content
+        run: |
+          git add archived_sites/
+          
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Archive: ${{ steps.archive.outputs.domain }} (depth=${{ inputs.depth }})
+            
+            - URL: ${{ inputs.url }}
+            - Archived: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+            - Depth: ${{ inputs.depth }}
+            
+            Full site mirror with CSS, JS, images and all assets."
+            
+            git push origin ${{ inputs.branch }}
+            
+            echo "✅ Archived content pushed to branch: ${{ inputs.branch }}"
+          fi
+      
+      - name: Summary
+        run: |
+          echo "## 📦 Archive Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL:** ${{ inputs.url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Domain:** ${{ steps.archive.outputs.domain }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Depth:** ${{ inputs.depth }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ inputs.branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Statistics" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -f "archived_sites/${{ steps.archive.outputs.domain }}/archive_metadata.json" ]; then
+            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+            cat "archived_sites/${{ steps.archive.outputs.domain }}/archive_metadata.json" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          fi
