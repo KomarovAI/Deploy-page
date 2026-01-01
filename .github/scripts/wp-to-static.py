@@ -57,7 +57,6 @@ class WordPressDestroyer:
         """Auto-detect original domain from HTML files."""
         domains = []
         
-        # Sample up to 10 HTML files
         sample_files = html_files[:min(10, len(html_files))]
         
         for html_file in sample_files:
@@ -65,21 +64,18 @@ class WordPressDestroyer:
                 content = html_file.read_text(encoding='utf-8', errors='ignore')
                 soup = BeautifulSoup(content, 'lxml')
                 
-                # Check canonical URL
                 canonical = soup.find('link', rel='canonical', href=True)
                 if canonical:
                     parsed = urlparse(canonical['href'])
                     if parsed.scheme and parsed.netloc:
                         domains.append(f"{parsed.scheme}://{parsed.netloc}")
                 
-                # Check og:url
                 og_url = soup.find('meta', property='og:url', content=True)
                 if og_url:
                     parsed = urlparse(og_url['content'])
                     if parsed.scheme and parsed.netloc:
                         domains.append(f"{parsed.scheme}://{parsed.netloc}")
                 
-                # Extract domains from absolute URLs in content
                 for tag in soup.find_all(['a', 'img', 'link', 'script'], href=True):
                     url = tag.get('href') or tag.get('src')
                     if url and url.startswith(('http://', 'https://')):
@@ -100,17 +96,14 @@ class WordPressDestroyer:
         if not domains:
             return None
         
-        # Find most common domain
         domain_counts = Counter(domains)
         most_common = domain_counts.most_common(1)[0][0]
         
-        # Filter out CDNs and external domains
         cdn_patterns = ['googleapis', 'gstatic', 'cloudflare', 'jsdelivr', 'unpkg', 'cdnjs']
         filtered = [d for d in domain_counts.keys() 
                    if not any(pattern in d.lower() for pattern in cdn_patterns)]
         
         if filtered:
-            # Return most common non-CDN domain
             return Counter({d: domain_counts[d] for d in filtered}).most_common(1)[0][0]
         
         return most_common
@@ -151,20 +144,16 @@ class WordPressDestroyer:
         for selector in selectors:
             content = soup.select_one(selector)
             if content:
-                # FIX: используем extract() вместо str() + BeautifulSoup()
                 clean_content = content.extract()
                 
-                # FIX: Удаляем вложенные html/body/head
                 for nested_tag in clean_content.find_all(['html', 'body', 'head']):
                     nested_tag.unwrap()
                 
-                # Удаляем мусор
                 for junk in clean_content.select('.wp-block-code, .sharedaddy, .jp-relatedposts, script, style, noscript'):
                     junk.decompose()
                 
                 return clean_content
         
-        # Fallback: берём body и очищаем
         body = soup.find('body')
         if body:
             body_copy = body.extract()
@@ -179,22 +168,18 @@ class WordPressDestroyer:
     def fix_lazy_load_images(self, content: Tag) -> None:
         """FIX: Конвертация lazy-load → обычные изображения."""
         for img in content.find_all('img'):
-            # data-src → src
             if img.get('data-src'):
                 img['src'] = img['data-src']
                 del img['data-src']
             
-            # data-srcset → srcset
             if img.get('data-srcset'):
                 img['srcset'] = img['data-srcset']
                 del img['data-srcset']
             
-            # Удаляем другие lazy-атрибуты
             for attr in ['data-src-webp', 'data-srcset-webp', 'data-eio', 'data-eio-rwidth', 'data-eio-rheight']:
                 if img.get(attr):
                     del img[attr]
             
-            # Удаляем lazy классы
             if img.get('class'):
                 img['class'] = [c for c in img['class'] if 'lazy' not in c.lower()]
                 if not img['class']:
@@ -231,19 +216,15 @@ class WordPressDestroyer:
         if not url:
             return url
         
-        # Skip special protocols
         if url.startswith(('#', 'mailto:', 'tel:', 'javascript:', 'data:')):
             return url
         
         original_url = url
         
-        # Convert absolute URLs from original domain to relative
         if self.original_domain and url.startswith(('http://', 'https://', '//')):
-            # Normalize protocol-relative URLs
             if url.startswith('//'):
                 url = 'https:' + url
             
-            # Check if URL belongs to original domain
             domain_variants = [
                 self.original_domain,
                 self.original_domain.replace('https://', 'http://'),
@@ -254,27 +235,22 @@ class WordPressDestroyer:
             
             for domain in domain_variants:
                 if url.startswith(domain):
-                    # Remove domain, keep path
                     url = url[len(domain):]
                     if not url.startswith('/'):
                         url = '/' + url
                     self.converted_absolute_urls += 1
                     break
             else:
-                # External domain - keep as is
                 return original_url
         
-        # Skip external URLs
         if url.startswith(('http://', 'https://', '//')):
             return url
         
-        # Split anchor
         anchor = ''
         if '#' in url:
             url, anchor = url.split('#', 1)
             anchor = '#' + anchor
         
-        # Split query
         query = ''
         if '?' in url:
             url, query = url.split('?', 1)
@@ -282,33 +258,25 @@ class WordPressDestroyer:
         
         clean_url = url.lstrip('./')
         
-        # Add .html if needed
         if clean_url and not clean_url.endswith(('.html', '/')):
             if '.' not in clean_url.split('/')[-1]:
                 clean_url += '.html'
         
-        # Build final URL
-        result = f"{self.base_path}/{clean_url}" if self.base_path != '/' else f"/{clean_url}"
+        result = f"{self.base_path}/{clean_url}" if self.base_path else f"/{clean_url}"
         return result + query + anchor
     
     def fix_paths_in_content(self, content: Tag) -> None:
-        # Fix images
         for img in content.find_all('img', src=True):
             img['src'] = self.fix_url(img['src'])
         
-        # Fix data-src/data-bg
-        for tag in content.find_all(attrs={'data-src': True}):
-            tag['data-src'] = self.fix_url(tag['data-src'])
         for tag in content.find_all(attrs={'data-bg': True}):
             tag['data-bg'] = self.fix_url(tag['data-bg'])
         for tag in content.find_all(attrs={'data-background': True}):
             tag['data-background'] = self.fix_url(tag['data-background'])
         
-        # Fix links
         for a in content.find_all('a', href=True):
             a['href'] = self.fix_url(a['href'])
         
-        # Fix style backgrounds
         for tag in content.find_all(style=True):
             style = tag['style']
             def replace_url(match):
@@ -318,10 +286,16 @@ class WordPressDestroyer:
             tag['style'] = re.sub(r'url\(([^)]+)\)', replace_url, style)
     
     def build_clean_html(self, title: str, content: Tag, css_files: List[str], js_files: List[str]) -> str:
-        css_links = [f'    <link rel="stylesheet" href="{self.base_path}/{css}">' for css in css_files]
+        css_links = []
+        for css in css_files:
+            href = f"{self.base_path}/{css}" if self.base_path else f"/{css}"
+            css_links.append(f'    <link rel="stylesheet" href="{href}">')
         critical_css = '\n'.join(css_links) if css_links else ''
         
-        js_scripts = [f'    <script src="{self.base_path}/{js}" defer></script>' for js in js_files]
+        js_scripts = []
+        for js in js_files:
+            src = f"{self.base_path}/{js}" if self.base_path else f"/{js}"
+            js_scripts.append(f'    <script src="{src}" defer></script>')
         scripts = '\n'.join(js_scripts) if js_scripts else ''
         
         meta_tags = f'    <meta name="description" content="{title}">'
@@ -344,9 +318,7 @@ class WordPressDestroyer:
             if not content:
                 return False
             
-            # FIX: Конвертируем lazy-load изображения
             self.fix_lazy_load_images(content)
-            
             self.fix_paths_in_content(content)
             css_files = self.collect_css(soup)
             js_files = self.collect_js(soup)
@@ -384,7 +356,7 @@ class WordPressDestroyer:
         if page_404.exists():
             return
         
-        homepage = f'{self.base_path}/' if self.base_path != '/' else '/'
+        homepage = f'{self.base_path}/' if self.base_path else '/'
         content = f'<main><h1>404 - Page Not Found</h1><p><a href="{homepage}">Go to Homepage</a></p></main>'
         
         html = self.CLEAN_TEMPLATE.format(
@@ -409,7 +381,6 @@ class WordPressDestroyer:
             print("⚠️ No HTML files found")
             return 1
         
-        # Auto-detect domain if not provided
         if not self.original_domain:
             print("🔍 Auto-detecting original domain...")
             detected = self.auto_detect_domain(html_files)
@@ -420,7 +391,7 @@ class WordPressDestroyer:
                 print("⚠️ Could not detect original domain - skipping absolute URL conversion")
         
         print(f"\n🔥 WORDPRESS DESTROYER")
-        print(f"Base path: {self.base_path}")
+        print(f"Base path: {self.base_path if self.base_path else '/'}")
         if self.original_domain:
             print(f"Original domain: {self.original_domain}")
         print("=" * 60)
