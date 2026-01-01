@@ -29,7 +29,7 @@ on:
       original_domain:
         description: 'Original domain to convert (e.g. https://example.com)'
         required: false
-        default: ''
+        default: 'https://www.caterkitservices.com'
 
 jobs:
   deploy:
