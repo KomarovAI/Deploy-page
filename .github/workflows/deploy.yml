@@ -22,10 +22,6 @@ on:
         description: 'Target branch'
         required: false
         default: 'main'
-      base_href:
-        description: 'Base href for GitHub Pages (e.g., / or /archived-sites/)'
-        required: false
-        default: '/'
 
 jobs:
   deploy:
@@ -68,18 +64,6 @@ jobs:
             exit 1
           fi
           
-          # Base href
-          BASE_HREF="${{ github.event.inputs.base_href }}"
-          if ! [[ $BASE_HREF =~ ^[./]*$ ]]; then
-            echo "Invalid base_href: $BASE_HREF"
-            exit 1
-          fi
-          
-          # Normalize base_href (add trailing slash if not root)
-          if [[ ! -z "$BASE_HREF" && "$BASE_HREF" != "/" ]]; then
-            BASE_HREF="${BASE_HREF%/}/"  # Remove trailing slash, then add it
-          fi
-          
           # Artifact name - use input or pattern matching
           ARTIFACT_NAME="${{ github.event.inputs.artifact_name }}"
           if [ -z "$ARTIFACT_NAME" ]; then
@@ -92,7 +76,6 @@ jobs:
           echo "source_repo=${SOURCE_REPO}" >> $GITHUB_OUTPUT
           echo "target_repo=${TARGET_REPO}" >> $GITHUB_OUTPUT
           echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
-          echo "base_href=${BASE_HREF}" >> $GITHUB_OUTPUT
           echo "Inputs validated"
           echo ""
           echo "Parameters:"
@@ -100,35 +83,24 @@ jobs:
           echo "- Source: ${SOURCE_REPO}"
           echo "- Target: ${TARGET_REPO}"
           echo "- Branch: ${{ github.event.inputs.target_branch }}"
-          echo "- Base href: ${BASE_HREF}"
           echo "- Artifact: ${ARTIFACT_NAME}"
 
-      # Step 2: Checkout Deploy-page repo (FORCE FRESH - NO CACHE)
+      # Step 2: Checkout Deploy-page repo
       - name: Checkout Deploy-page scripts
         uses: actions/checkout@v6
         with:
           repository: KomarovAI/Deploy-page
-          ref: main  # EXPLICITLY use main branch
+          ref: main
           path: deploy-page-repo
           fetch-depth: 1
-          clean: true  # Force clean checkout
+          clean: true
       
-      # Step 2.1: Verify script versions (debugging)
-      - name: Verify script versions
-        run: |
-          echo "🔍 Verifying script versions..."
-          cd deploy-page-repo
-          echo "Current commit: $(git rev-parse HEAD)"
-          echo "Current commit short: $(git rev-parse --short HEAD)"
-          echo "fix-static-site.py modified: $(git log -1 --format=%ci .github/scripts/fix-static-site.py)"
-          echo ""
-
       # Step 2.5: Install Python dependencies
       - name: Install Python dependencies
         run: |
           echo "📦 Installing Python dependencies..."
           python3 -m pip install --upgrade pip > /dev/null 2>&1
-          pip3 install beautifulsoup4 lxml rich pydantic > /dev/null 2>&1
+          pip3 install beautifulsoup4 lxml > /dev/null 2>&1
           echo "✅ Dependencies installed successfully"
 
       # Step 3: Download artifact from source workflow
@@ -254,47 +226,42 @@ jobs:
           echo "deployed_files=${DEST_FILES}" >> $GITHUB_OUTPUT
           echo "✅ Copied ${DEST_FILES} files"
 
-      # Step 10: Fix paths for GitHub Pages
-      - name: Fix paths
+      # Step 10: 🔥 RADICAL WORDPRESS DESTROYER 🔥
+      - name: Convert WordPress to clean static
         working-directory: target-repo
-        env:
-          BASE_HREF: ${{ steps.inputs.outputs.base_href }}
         run: |
           set -e
-          echo "🔧 Fixing paths for GitHub Pages..."
+          echo "🔥 DESTROYING WORDPRESS, BUILDING CLEAN STATIC SITE..."
           
-          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.py" ]; then
-            echo "❌ fix-paths.py script not found"
+          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/wp-to-static.py" ]; then
+            echo "❌ wp-to-static.py script not found"
             exit 1
           fi
           
-          python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.py"
-
-      # Step 10.5: Fix static site issues (WordPress exports)
-      - name: Fix static site issues
-        working-directory: target-repo
-        run: |
-          set -e
-          echo "🔨 Applying static site fixes..."
+          # Execute WordPress destroyer
+          python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/wp-to-static.py"
           
-          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py" ]; then
-            echo "⚠️ fix-static-site.py not found, skipping"
-          else
-            python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py"
-          fi
+          echo ""
+          echo "✅ WordPress destroyed, static site built"
 
-      # Step 11: Validate deployment
+      # Step 11: Validate deployment (optional, simple check)
       - name: Validate deployment
         working-directory: target-repo
-        env:
-          BASE_HREF: ${{ steps.inputs.outputs.base_href }}
         run: |
-          echo "✔️ Validating deployment..."
+          echo "✔️ Quick validation..."
           
-          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py" ]; then
-            echo "⚠️ validate-deploy.py not found, skipping"
-          else
-            python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py"
+          # Check if index.html exists
+          if [ ! -f "index.html" ]; then
+            echo "❌ index.html not found!"
+            exit 1
+          fi
+          
+          HTML_COUNT=$(find . -name '*.html' -type f | wc -l)
+          echo "✅ Found ${HTML_COUNT} HTML files"
+          
+          if [ $HTML_COUNT -eq 0 ]; then
+            echo "❌ No HTML files found!"
+            exit 1
           fi
 
       # Step 12: FORCE COMMIT - Always commit even if content identical
@@ -318,7 +285,7 @@ jobs:
           
           # ALWAYS COMMIT (even if empty) with --allow-empty flag
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
-          git commit --allow-empty -m "deploy: run ${{ steps.inputs.outputs.run_id }} at ${TIMESTAMP}" --quiet
+          git commit --allow-empty -m "deploy: 🔥 WordPress destroyed, static site deployed (run ${{ steps.inputs.outputs.run_id }}) at ${TIMESTAMP}" --quiet
           
           # Push to remote
           git push origin ${{ github.event.inputs.target_branch }} --quiet
@@ -351,7 +318,7 @@ jobs:
             echo "| Commit | ${{ steps.commit.outputs.commit_sha }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Files | ${{ steps.copy.outputs.deployedfiles }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Size | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Base href | ${{ steps.inputs.outputs.base_href }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Conversion | 🔥 WordPress → Clean Static |" >> $GITHUB_STEP_SUMMARY
           else
             echo "## ❌ Status: FAILED" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
