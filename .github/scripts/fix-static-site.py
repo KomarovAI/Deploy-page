@@ -88,6 +88,9 @@ class StaticSiteFixer:
             sectorsbars-pubs.html -> sectors/bars-pubs/index.html
             servicesdesign-sales.html -> services/design-sales/index.html
         """
+        print("\n📁 RESTRUCTURING PAGES:")
+        print("━" * 80)
+        
         # Find all HTML files recursively, excluding .git and .github
         html_files = [
             f for f in cwd.rglob("**/*.html")
@@ -97,7 +100,10 @@ class StaticSiteFixer:
         ]
         
         if not html_files:
+            print("   No files to restructure")
             return 0
+        
+        print(f"   Found {len(html_files)} files to check\n")
         
         restructured = 0
         for html_file in html_files:
@@ -139,6 +145,16 @@ class StaticSiteFixer:
                     
                     # Store mapping for link fixing
                     self.restructure_map[old_name] = new_path
+                    
+                    old_structure = str(rel_path)
+                    new_structure = str(target_file.relative_to(cwd))
+                    
+                    # DETAILED OUTPUT - показываем каждую страницу
+                    print(f"   ✓ {old_structure}")
+                    print(f"     → {new_structure}")
+                    print(f"     🌐 URL: /{new_path}")
+                    print()
+                    
                     restructured += 1
                 
                 else:
@@ -170,12 +186,24 @@ class StaticSiteFixer:
                     
                     # Store mapping
                     self.restructure_map[old_name] = new_path
+                    
+                    old_structure = str(rel_path)
+                    new_structure = str(target_file.relative_to(cwd))
+                    
+                    # DETAILED OUTPUT - показываем каждую страницу
+                    print(f"   ✓ {old_structure}")
+                    print(f"     → {new_structure}")
+                    print(f"     🌐 URL: /{new_path}")
+                    print()
+                    
                     restructured += 1
                 
             except Exception as e:
-                print(f"❌ Error restructuring {html_file.name}: {e}")
+                print(f"   ✗ ERROR: {html_file.name}: {e}")
         
         self.files_restructured = restructured
+        print("━" * 80)
+        print(f"✅ Restructured {restructured} page(s)\n")
         return restructured
     
     def fix_internal_links(self, cwd: Path) -> int:
@@ -216,7 +244,7 @@ class StaticSiteFixer:
                     html_file.write_text(str(soup), encoding="utf-8")
                     fixed_count += 1
                     
-            except Exception as e:
+            except Exception:
                 pass  # Silent error handling
         
         return fixed_count
@@ -290,20 +318,22 @@ class StaticSiteFixer:
             
             return False, 0
             
-        except Exception as e:
+        except Exception:
             return False, 0
     
     def run(self) -> int:
-        """Execute static site fixing with compact output."""
+        """Execute static site fixing with verbose restructure, compact other steps."""
         cwd = Path.cwd()
         
-        # STEP 1: Restructure files
+        # STEP 1: Restructure files (VERBOSE)
         self.restructure_files(cwd)
         
-        # STEP 2: Fix internal links after restructuring
-        self.fix_internal_links(cwd)
+        # STEP 2: Fix internal links after restructuring (COMPACT)
+        fixed_files = self.fix_internal_links(cwd)
+        if self.links_fixed > 0:
+            print(f"✅ Fixed {self.links_fixed} internal links in {fixed_files} files\n")
         
-        # STEP 3: Find HTML files (after restructuring)
+        # STEP 3: Find HTML files (after restructuring) (COMPACT)
         html_files = [
             f for f in cwd.rglob("*.html")
             if ".git" not in f.parts and ".github" not in f.parts
@@ -319,19 +349,9 @@ class StaticSiteFixer:
             if modified:
                 self.files_processed += 1
         
-        # Compact summary
-        parts = []
-        if self.files_restructured > 0:
-            parts.append(f"restructured {self.files_restructured} files")
-        if self.links_fixed > 0:
-            parts.append(f"fixed {self.links_fixed} links")
+        # Compact summary for processing
         if self.scripts_removed > 0:
-            parts.append(f"removed {self.scripts_removed} legacy scripts")
-        
-        if parts:
-            print(f"✅ Static site fixed: {', '.join(parts)}")
-        else:
-            print("✅ Static site verified (no changes needed)")
+            print(f"✅ Removed {self.scripts_removed} legacy scripts from {self.files_processed} files\n")
         
         return 0
 
