@@ -268,6 +268,28 @@ jobs:
           
           echo "Paths fixed successfully"
 
+      # Step 10.5: Fix static site issues (WordPress exports)
+      - name: Fix static site issues
+        working-directory: target-repo
+        run: |
+          set -e
+          echo "Applying static site fixes..."
+          
+          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.sh" ]; then
+            echo "⚠️ fix-static-site.sh not found, skipping static site fixes"
+          else
+            # Make script executable
+            chmod +x "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.sh"
+            
+            if ! bash "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.sh"; then
+              echo "Static site fixing failed - rolling back"
+              git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
+              exit 1
+            fi
+            
+            echo "✅ Static site fixes applied"
+          fi
+
       # Step 11: Validate deployment
       - name: Validate deployment
         working-directory: target-repo
