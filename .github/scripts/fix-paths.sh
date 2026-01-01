@@ -7,76 +7,148 @@ echo "🔧 Fixing paths for GitHub Pages..."
 BASE_HREF="${BASE_HREF:=/}"
 echo "BASE_HREF: ${BASE_HREF}"
 
-# Remove trailing slash for cleaner manipulation (we'll add it back when needed)
+# Normalize BASE_HREF (remove trailing slash for manipulation)
 BASE_HREF="${BASE_HREF%/}"
 
 # Find all HTML files
 HTML_FILES=$(find . -name "*.html" -type f ! -path '*/.git/*' ! -path '*/.github/*')
-HTML_COUNT=$(echo "$HTML_FILES" | wc -l)
+HTML_COUNT=$(echo "$HTML_FILES" | grep -c '.' || echo 0)
+
+if [ "$HTML_COUNT" -eq 0 ]; then
+  echo "⚠️  No HTML files found, skipping path fixing"
+  exit 0
+fi
 
 echo "Processing $HTML_COUNT HTML files..."
+echo ""
 
-# Counter for tracking replacements
+# Counter for tracking actual replacements
 TOTAL_REPLACEMENTS=0
 
 for file in $HTML_FILES; do
   echo "  Processing: $file"
   
-  # Create backup
-  cp "$file" "$file.backup"
+  # Track if file was modified
+  MODIFIED=0
   
   # 1. Fix absolute URLs pointing to the original domain
-  # href="https://www.caterkitservices.com/..." → href="./..."
-  sed -i 's|href="https://www\.caterkitservices\.com/|href="./|g' "$file"
-  sed -i "s|href='https://www\.caterkitservices\.com/|href='./|g" "$file"
+  # ONLY if they exist (idempotent check)
+  if grep -q 'https://www\.caterkitservices\.com/' "$file" 2>/dev/null; then
+    # href="https://www.caterkitservices.com/..." → href="./..."
+    COUNT=$(sed -i 's|href="https://www\.caterkitservices\.com/|href="./|g' "$file" | grep -c '^' || echo 0)
+    sed -i "s|href='https://www\.caterkitservices\.com/|href='./|g" "$file"
+    
+    # src="https://www.caterkitservices.com/..." → src="./..."
+    sed -i 's|src="https://www\.caterkitservices\.com/|src="./|g' "$file"
+    sed -i "s|src='https://www\.caterkitservices\.com/|src='./|g" "$file"
+    
+    echo "    ✓ Fixed domain-absolute URLs"
+    MODIFIED=1
+    TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + 1))
+  fi
   
-  # src="https://www.caterkitservices.com/..." → src="./..."
-  sed -i 's|src="https://www\.caterkitservices\.com/|src="./|g' "$file"
-  sed -i "s|src='https://www\.caterkitservices\.com/|src='./|g" "$file"
-  
-  # 2. Fix root-relative paths to be relative
-  # href="/category/..." → href="./category/..."  (but only if BASE_HREF is /)
-  if [ "$BASE_HREF" == "/" ] || [ -z "$BASE_HREF" ]; then
-    # For root deployment, convert /path to ./path
-    sed -i 's|href="/|href="./|g' "$file"
-    sed -i "s|href='/|href='./|g" "$file"
-    sed -i 's|src="/|src="./|g' "$file"
-    sed -i "s|src='/|src='./|g" "$file"
-    sed -i 's|url(/|url(./|g' "$file"
-    sed -i "s|url('/|url('./|g" "$file"
-    sed -i 's|url(\"/|url(\"./|g' "$file"
+  # 2. Fix root-relative paths based on BASE_HREF
+  if [ "$BASE_HREF" = "" ] || [ "$BASE_HREF" = "/" ]; then
+    # ROOT DEPLOYMENT: /path → ./path
+    # Only replace if NOT already relative (idempotent)
+    
+    # href="/path" → href="./path" (skip if already href="./")
+    if grep -qE 'href="/[^/]' "$file" 2>/dev/null; then
+      sed -i 's|href="/\([^/]\)|href="./\1|g' "$file"
+      echo "    ✓ Fixed href=\"/path\" → href=\"./path\""
+      MODIFIED=1
+      TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + 1))
+    fi
+    
+    if grep -qE "href='/[^/]" "$file" 2>/dev/null; then
+      sed -i "s|href='/\([^/]\)|href='./\1|g" "$file"
+      MODIFIED=1
+      TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + 1))
+    fi
+    
+    # src="/path" → src="./path"
+    if grep -qE 'src="/[^/]' "$file" 2>/dev/null; then
+      sed -i 's|src="/\([^/]\)|src="./\1|g' "$file"
+      echo "    ✓ Fixed src=\"/path\" → src=\"./path\""
+      MODIFIED=1
+      TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + 1))
+    fi
+    
+    if grep -qE "src='/[^/]" "$file" 2>/dev/null; then
+      sed -i "s|src='/\([^/]\)|src='./\1|g" "$file"
+      MODIFIED=1
+      TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + 1))
+    fi
+    
+    # url(/path) → url(./path)
+    if grep -qE 'url\(/[^/]' "$file" 2>/dev/null; then
+      sed -i 's|url(/\([^/]\)|url(./\1|g' "$file"
+      sed -i "s|url('/\([^/]\)|url('./\1|g" "$file"
+      sed -i 's|url("/\([^/]\)|url("./\1|g' "$file"
+      echo "    ✓ Fixed url(/path) → url(./path)"
+      MODIFIED=1
+      TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + 1))
+    fi
+    
   else
-    # For subpath deployment (e.g., /archived-sites/), prefix paths
-    sed -i 's|href="/|href="'$BASE_HREF'/|g' "$file"
-    sed -i "s|href='/|href='$BASE_HREF/|g" "$file"
-    sed -i 's|src="/|src="'$BASE_HREF'/|g' "$file"
-    sed -i "s|src='/|src='$BASE_HREF/|g" "$file"
-    sed -i 's|url(/|url('$BASE_HREF'/|g' "$file"
-    sed -i "s|url('/|url('$BASE_HREF/|g" "$file"
-    sed -i 's|url(\"/|url(\"'$BASE_HREF'/|g' "$file"
+    # SUBPATH DEPLOYMENT: /path → /base/path
+    # Critical: prevent double slashes like /archived-sites//path
+    
+    # href="/path" → href="/base/path" (only if not already prefixed)
+    if grep -qE "href=\"/[^/]" "$file" 2>/dev/null && ! grep -q "href=\"$BASE_HREF/" "$file" 2>/dev/null; then
+      # Use \1 to capture everything after the first /
+      sed -i "s|href=\"/\([^/]\"|href=\"$BASE_HREF/\1\"|g" "$file"
+      echo "    ✓ Prefixed href=\"/...\" with BASE_HREF"
+      MODIFIED=1
+      TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + 1))
+    fi
+    
+    if grep -qE "href='/[^/]" "$file" 2>/dev/null && ! grep -q "href='$BASE_HREF/" "$file" 2>/dev/null; then
+      sed -i "s|href='/\([^/]'\)|href='$BASE_HREF/\1|g" "$file"
+      MODIFIED=1
+      TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + 1))
+    fi
+    
+    # src="/path" → src="/base/path"
+    if grep -qE 'src="/[^/]' "$file" 2>/dev/null && ! grep -q "src=\"$BASE_HREF/" "$file" 2>/dev/null; then
+      sed -i "s|src=\"/\([^/]\"|src=\"$BASE_HREF/\1\"|g" "$file"
+      echo "    ✓ Prefixed src=\"/...\" with BASE_HREF"
+      MODIFIED=1
+      TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + 1))
+    fi
+    
+    if grep -qE "src='/[^/]" "$file" 2>/dev/null && ! grep -q "src='$BASE_HREF/" "$file" 2>/dev/null; then
+      sed -i "s|src='/\([^/]'\)|src='$BASE_HREF/\1|g" "$file"
+      MODIFIED=1
+      TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + 1))
+    fi
+    
+    # url(/path) → url(/base/path)
+    if grep -qE 'url\(/[^/]' "$file" 2>/dev/null && ! grep -q "url($BASE_HREF/" "$file" 2>/dev/null; then
+      sed -i "s|url(/\([^/]\)|url($BASE_HREF/\1|g" "$file"
+      sed -i "s|url('/\([^/]\)|url('$BASE_HREF/\1|g" "$file"
+      sed -i "s|url(\"/\([^/]\)|url(\"$BASE_HREF/\1|g" "$file"
+      echo "    ✓ Prefixed url(/...) with BASE_HREF"
+      MODIFIED=1
+      TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + 1))
+    fi
   fi
   
-  # 3. Count replacements
-  CHANGES=$(diff "$file.backup" "$file" 2>/dev/null | grep -c '^<' || echo 0)
-  if [ $CHANGES -gt 0 ]; then
-    echo "    ✓ Fixed $CHANGES lines"
-    TOTAL_REPLACEMENTS=$((TOTAL_REPLACEMENTS + CHANGES))
+  if [ $MODIFIED -eq 0 ]; then
+    echo "    → No changes needed (already correct)"
   fi
-  
-  # Cleanup backup
-  rm "$file.backup"
 done
 
 echo ""
 echo "✅ Path fixing complete!"
 echo "Total files processed: $HTML_COUNT"
-echo "Total line replacements: $TOTAL_REPLACEMENTS"
+echo "Total files modified: $TOTAL_REPLACEMENTS"
+echo ""
 
-# Note: We don't validate TOTAL_REPLACEMENTS here because:
-# - sed always returns 0 even if no substitutions were made
-# - diff-based counting may not accurately reflect actual changes
-# - The script logs show what was processed, manual review is better
-# - Files may already have correct paths from previous runs
+if [ $TOTAL_REPLACEMENTS -eq 0 ]; then
+  echo "ℹ️  No paths needed fixing (files already correct or no absolute paths found)"
+else
+  echo "📋 $TOTAL_REPLACEMENTS files were updated for GitHub Pages compatibility"
+fi
 
-echo "📋 All paths fixed for GitHub Pages deployment"
 exit 0
