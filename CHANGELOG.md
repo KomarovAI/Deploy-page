@@ -5,7 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.8.0] - 2026-01-01 🎉
+## [2.8.1] - 2026-01-01 ⚠️ CRITICAL
+
+### Fixed
+- 🔥 **CRITICAL:** Fixed `fix-static-site.sh` script injection failure
+- ❌ v2.8.0 had: `sed: -e expression #1, char 45: unterminated 's' command`
+- ✅ Replaced `sed` with `perl` for safe JavaScript injection
+- ✅ Added `awk` fallback for maximum compatibility
+- ✅ Handles special characters (slashes, quotes, brackets) in injected code
+- ✅ Maintained idempotent behavior (duplicate detection)
+
+### Technical Details
+
+**Problem:**
+```bash
+# ❌ OLD (broken with special chars in $JS_FIX)
+sed -i "s|</body>|${JS_FIX}\n</body>|" "$file"
+```
+
+**Solution:**
+```bash
+# ✅ NEW (safe with any characters)
+perl -0777 -i -pe "s|</body>|\$(cat $JS_FIX_FILE)\n</body>|" "$file" || {
+  # Fallback to awk if perl unavailable
+  awk -v insert="$(cat "$JS_FIX_FILE")" '
+    /<\/body>/ { print insert }
+    { print }
+  ' "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+}
+```
+
+**Why it failed:**
+- JavaScript code contained `/`, `'`, `"` characters
+- These conflicted with `sed` delimiters
+- Example: `href.indexOf('://')` broke sed parsing
+
+**Migration:**
+- 🚨 **If you're on v2.8.0, update immediately to v2.8.1!**
+- No breaking changes - drop-in replacement
+- All workflows should now pass Step 10.5
+
+---
+
+## [2.8.0] - 2026-01-01 🎉 (DEPRECATED - use v2.8.1)
 
 ### Added
 - **NEW SCRIPT:** `fix-static-site.sh` for WordPress static export processing
@@ -27,6 +69,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 🐛 **Navigation broken** by `e.preventDefault()` in theme JavaScript
 - 🐛 **404 errors** on wp-login.php, xmlrpc.php, and other WordPress dynamic files
 - 🐛 **Path conflicts** from Autoptimize cache expecting WordPress directory structure
+
+### Known Issues
+- ❌ **BUG:** sed injection fails with special characters (fixed in v2.8.1)
 
 ### Technical Details
 
