@@ -51,11 +51,11 @@ class StaticSiteFixer:
         'sitemap.xml',
     }
     
-    # Known directory prefixes for WordPress sites (ordered by length, longest first)
+    # Known directory prefixes (ordered by length for precise matching)
     DIRECTORY_PREFIXES = [
-        'category',
+        'services',  # Must be before 'sector' to avoid wrong matches
         'sectors',
-        'services',
+        'category',
         'news',
     ]
     
@@ -80,6 +80,7 @@ class StaticSiteFixer:
         
         Examples:
             sectorsbars-pubs.html -> ('sectors', 'bars-pubs')
+            servicesdesign-sales-installation.html -> ('services', 'design-sales-installation')
             categoryinsights.html -> ('category', 'insights')
             newschristmas-opening.html -> ('news', 'christmas-opening')
         
@@ -97,13 +98,14 @@ class StaticSiteFixer:
         return None
     
     def restructure_files(self, cwd: Path) -> int:
-        """Restructure HTML files: sectors/bars-pubs.html -> sectors/bars-pubs/index.html.
+        """Restructure HTML files by creating proper folder structure.
         
-        This fixes GitHub Pages 404 errors for WordPress-style URLs (/sectors/bars-pubs/)
-        by creating a folder structure compatible with GitHub Pages routing.
+        This fixes GitHub Pages 404 errors by creating folder structure compatible
+        with GitHub Pages routing.
         
-        Also handles flattened filenames (e.g., sectorsbars-pubs.html) by detecting
-        and restoring the directory structure.
+        Transforms:
+            sectorsbars-pubs.html -> sectors/bars-pubs/index.html
+            servicesdesign-sales.html -> services/design-sales/index.html
         """
         console.print("\n[bold cyan]📁 STEP 1: Restructuring file layout...[/bold cyan]")
         
@@ -119,61 +121,80 @@ class StaticSiteFixer:
             console.print("[yellow]   No files to restructure[/yellow]")
             return 0
         
-        console.print(f"[cyan]   Found {len(html_files)} files to restructure[/cyan]")
+        console.print(f"[cyan]   Found {len(html_files)} files to check[/cyan]")
         
         restructured = 0
         for html_file in html_files:
             try:
                 # Get relative path from cwd
                 rel_path = html_file.relative_to(cwd)
-                
-                # Get parent directory and base name
                 parent_dir = rel_path.parent
-                base_name = html_file.stem
+                base_name = html_file.stem  # filename without .html
                 
-                # CRITICAL FIX: Detect if filename is flattened (e.g., sectorsbars-pubs)
+                # Detect if filename is flattened (e.g., sectorsbars-pubs)
                 detected_structure = self.detect_directory_structure(base_name)
                 
                 if detected_structure:
                     # Flattened filename detected - restore directory structure
                     dir_prefix, file_base = detected_structure
                     
-                    # Build path: parent/dir_prefix/file_base/
-                    if str(parent_dir) == '.':
-                        target_folder = cwd / dir_prefix / file_base
-                    else:
-                        target_folder = cwd / parent_dir / dir_prefix / file_base
-                    
-                    old_structure = f"{base_name}.html"
-                    new_structure = f"{dir_prefix}/{file_base}/index.html"
-                    
-                else:
-                    # Normal filename - use existing structure
+                    # CRITICAL: Build CORRECT path with directories
                     if str(parent_dir) == '.':
                         # File is in root directory
-                        target_folder = cwd / base_name
-                        new_structure = f"{base_name}/index.html"
+                        target_folder = cwd / dir_prefix / file_base
                     else:
-                        # File is in a subdirectory - preserve the full path
-                        target_folder = cwd / parent_dir / base_name
-                        new_structure = f"{parent_dir}/{base_name}/index.html"
+                        # File is in a subdirectory
+                        target_folder = cwd / parent_dir / dir_prefix / file_base
+                    
+                    # CREATE the target folder
+                    target_folder.mkdir(parents=True, exist_ok=True)
+                    
+                    # Target file: directory/basename/index.html
+                    target_file = target_folder / "index.html"
+                    
+                    # Copy file content to new location
+                    shutil.copy2(html_file, target_file)
+                    
+                    # Remove original file
+                    html_file.unlink()
                     
                     old_structure = str(rel_path)
+                    new_structure = str(target_file.relative_to(cwd))
+                    
+                    logger.info(f"Restructured: {old_structure} -> {new_structure}")
+                    console.print(f"   [green]✓[/green] {old_structure} → {new_structure}")
+                    restructured += 1
                 
-                target_folder.mkdir(parents=True, exist_ok=True)
-                
-                # Target file: directory/basename/index.html
-                target_file = target_folder / "index.html"
-                
-                # Copy file content
-                shutil.copy2(html_file, target_file)
-                
-                # Remove original file
-                html_file.unlink()
-                
-                logger.info(f"Restructured: {old_structure} -> {new_structure}")
-                console.print(f"   [green]✓[/green] {old_structure} → {new_structure}")
-                restructured += 1
+                else:
+                    # Normal filename (not flattened) - check if needs restructuring
+                    if base_name in ['index', '404']:
+                        # Keep index.html and 404.html as-is
+                        continue
+                    
+                    # Create folder for this file: parent/basename/index.html
+                    if str(parent_dir) == '.':
+                        target_folder = cwd / base_name
+                    else:
+                        target_folder = cwd / parent_dir / base_name
+                    
+                    # CREATE the target folder
+                    target_folder.mkdir(parents=True, exist_ok=True)
+                    
+                    # Target file
+                    target_file = target_folder / "index.html"
+                    
+                    # Copy file content to new location
+                    shutil.copy2(html_file, target_file)
+                    
+                    # Remove original file
+                    html_file.unlink()
+                    
+                    old_structure = str(rel_path)
+                    new_structure = str(target_file.relative_to(cwd))
+                    
+                    logger.info(f"Restructured: {old_structure} -> {new_structure}")
+                    console.print(f"   [green]✓[/green] {old_structure} → {new_structure}")
+                    restructured += 1
                 
             except Exception as e:
                 logger.error(f"Failed to restructure {html_file.name}: {e}")
@@ -212,9 +233,9 @@ class StaticSiteFixer:
             logger.warning("No <body> tag found")
             return False
         
-        # Navigation fix JavaScript - simplified for folder structure
+        # Navigation fix JavaScript
         nav_fix_js = '''<script>
-// GitHub Pages navigation fix for folder structure
+// GitHub Pages navigation fix
 (function() {
   console.log('✅ GitHub Pages navigation active');
 })();
@@ -233,7 +254,7 @@ class StaticSiteFixer:
         """Process a single HTML file."""
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
-            soup = BeautifulSoup(content, "lxml")  # Fast lxml parser!
+            soup = BeautifulSoup(content, "lxml")
             
             modified = False
             scripts_removed = 0
