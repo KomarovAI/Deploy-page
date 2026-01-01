@@ -54,6 +54,7 @@ class StaticSiteFixer:
         self.scripts_removed = 0
         self.files_restructured = 0
         self.links_fixed = 0
+        self.resources_fixed = 0
         self.restructure_map: Dict[str, str] = {}  # old_name -> new_path
     
     def detect_directory_structure(self, filename: str) -> Optional[Tuple[str, str]]:
@@ -216,6 +217,63 @@ class StaticSiteFixer:
         print(f"✅ Restructured {restructured} page(s)\n")
         return restructured
     
+    def fix_resource_paths(self, soup: BeautifulSoup, depth: int) -> int:
+        """Fix relative paths to CSS/JS/images after restructuring.
+        
+        CRITICAL FIX: Convert relative paths to work from subdirectories.
+        
+        Args:
+            soup: BeautifulSoup parsed HTML
+            depth: Folder nesting depth (news-insights/ = 1, sectors/bars/ = 2)
+        
+        Examples:
+            depth=1: wp-content/... → ../wp-content/...
+            depth=2: wp-content/... → ../../wp-content/...
+        
+        Returns:
+            Number of resources fixed
+        """
+        if depth == 0:
+            return 0
+        
+        fixed = 0
+        prefix = "../" * depth
+        
+        # Fix CSS links
+        for tag in soup.find_all('link', href=True):
+            href = tag['href']
+            if href.startswith('wp-content/') or href.startswith('wp-includes/'):
+                tag['href'] = prefix + href
+                fixed += 1
+        
+        # Fix JS scripts
+        for tag in soup.find_all('script', src=True):
+            src = tag['src']
+            if src.startswith('wp-content/') or src.startswith('wp-includes/'):
+                tag['src'] = prefix + src
+                fixed += 1
+        
+        # Fix images
+        for tag in soup.find_all('img', src=True):
+            src = tag['src']
+            if src.startswith('wp-content/'):
+                tag['src'] = prefix + src
+                fixed += 1
+        
+        # Fix background images in style attributes
+        for tag in soup.find_all(style=True):
+            style = tag['style']
+            if 'wp-content/' in style:
+                # Replace url(wp-content/...) with url(../wp-content/...)
+                tag['style'] = re.sub(
+                    r'url\(\s*(["\']?)wp-content/',
+                    f'url(\\1{prefix}wp-content/',
+                    style
+                )
+                fixed += 1
+        
+        return fixed
+    
     def fix_internal_links(self, cwd: Path) -> int:
         """Fix internal links after restructuring.
         
@@ -302,14 +360,33 @@ class StaticSiteFixer:
         body.append(script_tag)
         return True
     
-    def process_html_file(self, file_path: Path) -> Tuple[bool, int]:
-        """Process a single HTML file."""
+    def process_html_file(self, file_path: Path, cwd: Path) -> Tuple[bool, int, int]:
+        """Process a single HTML file.
+        
+        Args:
+            file_path: Path to HTML file
+            cwd: Current working directory (repo root)
+        
+        Returns:
+            (modified, scripts_removed, resources_fixed) tuple
+        """
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
             soup = BeautifulSoup(content, "lxml")
             
             modified = False
             scripts_removed = 0
+            resources_fixed = 0
+            
+            # Calculate folder depth for resource path fixing
+            rel_path = file_path.relative_to(cwd)
+            depth = len(rel_path.parts) - 1  # news-insights/index.html → depth=1
+            
+            # Fix resource paths (CSS/JS/images)
+            resources_fixed = self.fix_resource_paths(soup, depth)
+            if resources_fixed > 0:
+                modified = True
+                self.resources_fixed += resources_fixed
             
             # Remove legacy scripts
             scripts_removed = self.remove_legacy_scripts(soup)
@@ -325,12 +402,12 @@ class StaticSiteFixer:
             # Save if modified
             if modified:
                 file_path.write_text(str(soup), encoding="utf-8")
-                return True, scripts_removed
+                return True, scripts_removed, resources_fixed
             
-            return False, 0
+            return False, 0, 0
             
         except Exception:
-            return False, 0
+            return False, 0, 0
     
     def run(self) -> int:
         """Execute static site fixing with verbose restructure, compact other steps."""
@@ -356,11 +433,14 @@ class StaticSiteFixer:
         
         # Process files silently
         for html_file in html_files:
-            modified, removed = self.process_html_file(html_file)
+            modified, removed, resources = self.process_html_file(html_file, cwd)
             if modified:
                 self.files_processed += 1
         
         # Compact summary for processing
+        if self.resources_fixed > 0:
+            print(f"✅ Fixed {self.resources_fixed} resource paths (CSS/JS/images)\n")
+        
         if self.scripts_removed > 0:
             print(f"✅ Removed {self.scripts_removed} legacy scripts from {self.files_processed} files\n")
         
