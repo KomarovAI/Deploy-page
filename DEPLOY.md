@@ -9,8 +9,9 @@ The deployment workflow:
 2. 🧹 Cleans the target repository completely
 3. 📦 Copies all website files
 4. 🔧 Fixes all paths for GitHub Pages hosting
-5. ✅ Validates the deployment
-6. 🚀 Force pushes to the target repository
+5. 🛠️ Applies static site optimizations (WordPress export fixes)
+6. ✅ Validates the deployment
+7. 🚀 Force pushes to the target repository
 
 ## Prerequisites
 
@@ -84,6 +85,46 @@ Example run ID: `20479494022`
 - Fixes paths in HTML, CSS, and JavaScript files
 - Adds `<base href>` tag if using subpath deployment
 
+### Phase 5.5: Fix Static Site Issues (🛠️) **NEW!**
+
+**This phase optimizes WordPress-exported static sites for GitHub Pages:**
+
+#### 1. Remove Legacy WordPress JavaScript
+- Deletes `autoptimize/*` files (caching/minification plugin)
+- Removes `comment-reply*.js` (comment form handlers)
+- Removes `wp-embed*.js` (WordPress embed handlers)
+- Removes `wp-emoji*.js` (emoji scripts)
+
+These files are unnecessary in static sites and can cause conflicts.
+
+#### 2. Fix Click Handler Conflicts
+Adds a navigation fix script that:
+- **Kills legacy WordPress event listeners** on internal links
+- **Prevents preventDefault() conflicts** that block navigation
+- **Preserves Ctrl/Cmd+Click** for opening in new tabs
+- **Uses capturing phase** to run BEFORE WordPress handlers
+
+**Why this is needed:**
+WordPress exports often include JavaScript that calls `preventDefault()` on all link clicks, breaking navigation on static sites. Our fix ensures internal `.html` links work correctly.
+
+**Example fix added to each HTML file:**
+```html
+<!-- Static Site Navigation Fix -->
+<script>
+(function() {
+  document.addEventListener('click', function(e) {
+    // Find <a> tag and check if it's an internal .html link
+    // If yes: stop other handlers and navigate directly
+  }, true); // Capturing phase = runs FIRST
+})();
+</script>
+```
+
+**Result:**
+- ✅ Fast navigation between pages
+- ✅ No broken link clicks
+- ✅ Ctrl+Click still works for new tabs
+
 ### Phase 6: Validate (✅)
 
 - Checks deployed files
@@ -138,6 +179,24 @@ Example run ID: `20479494022`
 3. Check browser console for broken resource links
 4. Redeploy with correct base_href
 
+### Issue: "Links don't work after deployment" **NEW!**
+
+**Cause**: Legacy WordPress JavaScript blocking navigation
+
+**Solution**:
+1. Check workflow logs for "Fix static site issues" step
+2. Verify the step completed successfully
+3. Inspect HTML files to confirm navigation fix was added (search for "Static Site Navigation Fix")
+4. If missing, re-run deployment - the fix is now automatic
+
+**Manual verification:**
+```bash
+# Check if fix was applied
+grep -r "Static Site Navigation Fix" target-repo/*.html
+
+# Expected output: found in all HTML files
+```
+
 ### Issue: Force push failed
 
 **Cause**: Permission issues or branch protection
@@ -155,15 +214,21 @@ After successful deployment, your target repository will contain:
 archived-sites/
 ├── .git/               # Git repository (preserved)
 ├── .github/            # GitHub configs (preserved)
-├── index.html          # Deployed website files
+├── index.html          # Deployed website files (with fixes)
 ├── css/
 │   └── style.css
 ├── js/
-│   └── script.js
+│   └── script.js       # Legacy WordPress JS removed
 └── assets/
     ├── images/
     └── fonts/
 ```
+
+**Changes applied:**
+- ❌ `autoptimize/` folder - **REMOVED**
+- ❌ `comment-reply.js` - **REMOVED**  
+- ✅ `index.html` - **FIXED** (navigation script added)
+- ✅ All `.html` files - **FIXED** (paths updated, navigation fixed)
 
 ## Deployment Summary
 
@@ -171,6 +236,8 @@ After each deployment, GitHub Actions generates a summary showing:
 
 - ✅ Deployment status (Success/Failed)
 - 📊 Number of files deployed
+- 🗑️ Legacy JS files removed (new)
+- 🖱️ HTML files fixed (new)
 - 📦 Total artifact size
 - 🔗 Links to repository and commits
 - ⏰ Deployment timestamp
@@ -183,6 +250,7 @@ After each deployment, GitHub Actions generates a summary showing:
 4. **Document the base_href** for each repository
 5. **Check the workflow logs** if something goes wrong
 6. **Verify deployed files** in the target repository after deployment
+7. **Test navigation** after deployment to ensure fixes work correctly (new)
 
 ## Advanced Options
 
@@ -214,6 +282,32 @@ git reset --hard HEAD
 git clean -fdx
 ```
 
+### Manual Static Site Fix
+
+If you need to manually apply the static site fix:
+
+```bash
+# From Deploy-page repo
+cd target-repo
+bash ../Deploy-page/.github/scripts/fix-static-site.sh
+```
+
+## Technical Details
+
+### Script Execution Order
+
+1. `fix-paths.sh` - Fixes all paths for GitHub Pages
+2. `fix-static-site.sh` - Removes legacy JS and adds navigation fix (⭐ **NEW**)
+3. `validate-deploy.sh` - Validates the final deployment
+
+### Script Features
+
+**fix-static-site.sh**:
+- ✅ Idempotent (safe to run multiple times)
+- ✅ Rollback support (reverts on failure)
+- ✅ Detailed logging (shows what was changed)
+- ✅ File count verification
+
 ## Support
 
 For issues or questions:
@@ -222,3 +316,4 @@ For issues or questions:
 2. Review this troubleshooting guide
 3. Check the web-crawler logs for artifact issues
 4. Verify GitHub Pages settings in target repository
+5. Test navigation manually after deployment (new)
