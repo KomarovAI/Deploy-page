@@ -1,162 +1,364 @@
-name: Deploy to GitHub Pages
+name: Deploy Website to GitHub Pages
 
 on:
   workflow_dispatch:
     inputs:
-      runid:
-        description: 'Run ID from web-crawler'
+      run_id:
+        description: 'Run ID from web-crawler workflow'
         required: true
-      sourcerepo:
-        description: 'Source repository (owner/repo)'
-        required: true
-        default: 'KomarovAI/web-crawler'
-      basepath:
-        description: 'Base path (e.g., /Deploy-page/ or / for root)'
+      artifact_name:
+        description: 'Artifact name (default: auto-detect from run_id)'
         required: false
-        default: '/Deploy-page/'
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
+        default: ''
+      source_repo:
+        description: 'Source repository (owner/repo)'
+        required: false
+        default: 'KomarovAI/web-crawler'
+      target_repo:
+        description: 'Target repository (owner/repo)'
+        required: false
+        default: 'KomarovAI/archived-sites'
+      target_branch:
+        description: 'Target branch'
+        required: false
+        default: 'main'
+      base_href:
+        description: 'Base href for GitHub Pages (e.g., / or /archived-sites/)'
+        required: false
+        default: '/'
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: write
+    
+    outputs:
+      commit_sha: ${{ steps.commit.outputs.commit_sha }}
+      deployed_files: ${{ steps.copy.outputs.deployedfiles }}
     
     steps:
-      - name: Download artifact from web-crawler
+      # Step 1: Validate and normalize inputs
+      - name: Validate inputs
+        id: inputs
+        shell: bash
+        run: |
+          echo "Validating inputs..."
+          
+          # Run ID
+          RUN_ID="${{ github.event.inputs.run_id }}"
+          if ! [[ $RUN_ID =~ ^[0-9]+$ ]]; then
+            echo "Invalid run_id format: $RUN_ID"
+            exit 1
+          fi
+          
+          # Source repository
+          SOURCE_REPO="${{ github.event.inputs.source_repo }}"
+          SOURCE_REPO=$(echo "$SOURCE_REPO" | xargs)
+          if ! [[ $SOURCE_REPO =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]?/[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]?$ ]]; then
+            echo "Invalid source_repo format: $SOURCE_REPO"
+            exit 1
+          fi
+          
+          # Target repository  
+          TARGET_REPO="${{ github.event.inputs.target_repo }}"
+          TARGET_REPO=$(echo "$TARGET_REPO" | xargs)
+          if ! [[ $TARGET_REPO =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]?/[a-zA-Z0-9][a-zA-Z0-9._-]*[a-zA-Z0-9]?$ ]]; then
+            echo "Invalid target_repo format: $TARGET_REPO"
+            exit 1
+          fi
+          
+          # Base href
+          BASE_HREF="${{ github.event.inputs.base_href }}"
+          if ! [[ $BASE_HREF =~ ^[./]*$ ]]; then
+            echo "Invalid base_href: $BASE_HREF"
+            exit 1
+          fi
+          
+          # Normalize base_href (add trailing slash if not root)
+          if [[ ! -z "$BASE_HREF" && "$BASE_HREF" != "/" ]]; then
+            BASE_HREF="${BASE_HREF%/}/"  # Remove trailing slash, then add it
+          fi
+          
+          # Artifact name - use input or pattern matching
+          ARTIFACT_NAME="${{ github.event.inputs.artifact_name }}"
+          if [ -z "$ARTIFACT_NAME" ]; then
+            # Auto-detect: try pattern *-${RUN_ID}
+            echo "⚠️ Artifact name not provided, will use pattern matching: *-${RUN_ID}"
+            ARTIFACT_NAME="*-${RUN_ID}"
+          fi
+          
+          echo "run_id=${RUN_ID}" >> $GITHUB_OUTPUT
+          echo "source_repo=${SOURCE_REPO}" >> $GITHUB_OUTPUT
+          echo "target_repo=${TARGET_REPO}" >> $GITHUB_OUTPUT
+          echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+          echo "base_href=${BASE_HREF}" >> $GITHUB_OUTPUT
+          echo "Inputs validated"
+          echo ""
+          echo "Parameters:"
+          echo "- Run ID: ${RUN_ID}"
+          echo "- Source: ${SOURCE_REPO}"
+          echo "- Target: ${TARGET_REPO}"
+          echo "- Branch: ${{ github.event.inputs.target_branch }}"
+          echo "- Base href: ${BASE_HREF}"
+          echo "- Artifact: ${ARTIFACT_NAME}"
+
+      # Step 2: Checkout Deploy-page repo (contains scripts)
+      - name: Checkout Deploy-page scripts
+        uses: actions/checkout@v6
+        with:
+          path: deploy-page-repo
+          fetch-depth: 1
+
+      # Step 2.5: Install Python dependencies
+      - name: Install Python dependencies
+        run: |
+          echo "📦 Installing Python dependencies..."
+          python3 -m pip install --upgrade pip
+          pip3 install beautifulsoup4 lxml rich pydantic
+          echo "✅ Dependencies installed successfully"
+
+      # Step 3: Download artifact from source workflow
+      - name: Download site archive
         uses: dawidd6/action-download-artifact@v12
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          repo: ${{ github.event.inputs.sourcerepo }}
-          run_id: ${{ github.event.inputs.runid }}
+          repo: ${{ steps.inputs.outputs.source_repo }}
+          run_id: ${{ steps.inputs.outputs.run_id }}
+          name: ${{ steps.inputs.outputs.artifact_name }}
           path: site-content
           search_artifacts: true
-          workflow_conclusion: success
 
-      - name: Fix flattened file structure
+      # Step 4: Verify artifact
+      - name: Verify artifact
+        id: verify
+        shell: bash
         run: |
-          echo "🔧 Restructuring files for GitHub Pages..."
-          cd site-content
-          
-          # Extract from nested directory if exists
-          NESTED=$(find . -mindepth 1 -maxdepth 1 -type d | head -1)
-          if [ -n "$NESTED" ]; then
-            echo "📦 Found nested: $NESTED"
-            mv "$NESTED"/* ./ 2>/dev/null || true
-            rmdir "$NESTED" 2>/dev/null || true
+          if [ ! -d "site-content" ] || [ -z "$(ls -A site-content 2>/dev/null)" ]; then
+            echo "Artifact not found or empty"
+            ls -R . || true
+            exit 1
           fi
+          FILE_COUNT=$(find site-content -type f | wc -l)
+          DIR_SIZE=$(du -sh site-content | cut -f1)
+          echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
+          echo "dir_size=${DIR_SIZE}" >> $GITHUB_OUTPUT
+          echo "Artifact verified"
+          echo "Files: ${FILE_COUNT}, Size: ${DIR_SIZE}"
+
+      # Step 5: Checkout target repository
+      - name: Checkout target repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.inputs.outputs.target_repo }}
+          token: ${{ secrets.EXTERNAL_REPO_PAT }}
+          ref: ${{ github.event.inputs.target_branch }}
+          fetch-depth: 0
+          path: target-repo
+
+      # Step 6: Configure Git
+      - name: Configure Git
+        working-directory: target-repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "Git configured"
+
+      # Step 7: Create snapshot for rollback
+      - name: Create snapshot
+        id: snapshot
+        working-directory: target-repo
+        run: |
+          SNAPSHOT_SHA=$(git rev-parse HEAD)
+          echo "snapshot_sha=${SNAPSHOT_SHA}" >> $GITHUB_OUTPUT
+          echo "Snapshot created: ${SNAPSHOT_SHA}"
+
+      # Step 8: Clean repository (full wipe except .github)
+      - name: Clean repository
+        working-directory: target-repo
+        run: |
+          echo "🧹 FULL REPOSITORY CLEAN..."
           
-          echo "📁 Creating directory structure..."
-          
-          # Process HTML files with flattened names
-          for file in *.html; do
-            [ "$file" = "*.html" ] && break
-            [ "$file" = "index.html" ] && continue
-            [ "$file" = "404.html" ] && continue
-            
-            name="${file%.html}"
-            
-            case "$name" in
-              sectors*)
-                rest="${name#sectors}"
-                mkdir -p "sectors$rest"
-                mv "$file" "sectors$rest/index.html"
-                echo "  ✓ $file → sectors$rest/index.html"
-                ;;
-              services*)
-                rest="${name#services}"
-                mkdir -p "services$rest"
-                mv "$file" "services$rest/index.html"
-                echo "  ✓ $file → services$rest/index.html"
-                ;;
-              category*)
-                rest="${name#category}"
-                mkdir -p "category$rest"
-                mv "$file" "category$rest/index.html"
-                echo "  ✓ $file → category$rest/index.html"
-                ;;
-              news*)
-                rest="${name#news}"
-                mkdir -p "news$rest"
-                mv "$file" "news$rest/index.html"
-                echo "  ✓ $file → news$rest/index.html"
-                ;;
-              *)
-                mkdir -p "$name"
-                mv "$file" "$name/index.html"
-                echo "  ✓ $file → $name/index.html"
-                ;;
-            esac
+          # Remove ALL tracked files except .github
+          git ls-files | grep -v '^.github' | while read -r file; do
+            git rm -rf -- "$file" 2>/dev/null || true
           done
           
-          echo "✅ Structure ready!"
+          # Remove ALL untracked files/dirs except .git
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name '.github' -exec rm -rf {} +
+          
+          # Verify cleanup
+          REMAINING=$(git ls-files | grep -v '^.github' | wc -l)
+          if [ $REMAINING -gt 0 ]; then
+            echo "⚠️ Warning: $REMAINING files remaining after cleanup"
+            git ls-files | grep -v '^.github' | head -20
+          else
+            echo "✅ Repository fully cleaned (except .github)"
+          fi
+          
+          # COMMIT THE DELETION - this is critical!
+          if ! git diff --cached --quiet; then
+            echo "Committing file deletions..."
+            git commit -m "chore: clean repository before deploy" || true
+            echo "✅ Deletions committed"
+          else
+            echo "No files to delete"
+          fi
 
-      - name: Fix paths for GitHub Pages
+      # Step 9: Copy website files TO ROOT
+      - name: Copy website files
+        id: copy
+        working-directory: target-repo
         run: |
-          echo "🔗 Fixing URLs for base path: ${{ github.event.inputs.basepath }}"
-          cd site-content
+          echo "Copying website files..."
           
-          cat > fix_paths.py << 'PYTHON_SCRIPT'
-          import re
-          import sys
-          from pathlib import Path
+          if [ ! -d "$GITHUB_WORKSPACE/site-content" ]; then
+            echo "Source directory not found"
+            exit 1
+          fi
           
-          BASE_PATH = "${{ github.event.inputs.basepath }}".rstrip('/') + '/'
-          if BASE_PATH == '//': BASE_PATH = '/'
+          SOURCE_FILES=$(find "$GITHUB_WORKSPACE/site-content" -type f | wc -l)
+          echo "Source files: $SOURCE_FILES"
           
-          print(f"Base path: {BASE_PATH}")
+          # CRITICAL FIX: Check if content is nested in a subdirectory
+          SUBDIRS=$(find "$GITHUB_WORKSPACE/site-content" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
           
-          def fix_html(file_path):
-              try:
-                  content = file_path.read_text(encoding='utf-8', errors='ignore')
-                  original = content
-                  
-                  # Fix absolute paths: /path/ -> /Deploy-page/path/
-                  # But NOT: //external.com or http:// or https://
-                  content = re.sub(
-                      r'(["\'])(/(?![/\w-]+\.(jpg|png|gif|svg|css|js|woff|woff2))(?!/)([^"\']*))',
-                      r'\1' + BASE_PATH + r'\3',
-                      content
-                  )
-                  
-                  # Fix href and src starting with /
-                  content = re.sub(
-                      r'(href|src)="/([^/])',
-                      r'\1="' + BASE_PATH + r'\2',
-                      content
-                  )
-                  
-                  if content != original:
-                      file_path.write_text(content, encoding='utf-8')
-                      return 1
-                  return 0
-              except Exception as e:
-                  print(f"Error in {file_path}: {e}", file=sys.stderr)
-                  return 0
+          if [ $SUBDIRS -eq 1 ]; then
+            # Single subdirectory found - extract its contents to root
+            SUBDIR=$(find "$GITHUB_WORKSPACE/site-content" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+            echo "📦 Nested structure detected: $SUBDIR"
+            echo "   Extracting contents to root..."
+            cp -r "$SUBDIR"/* "$GITHUB_WORKSPACE/target-repo/" || {
+              echo "Failed to copy nested files"
+              exit 1
+            }
+          else
+            # Multiple items or files at root - copy as-is
+            echo "📦 Flat structure detected"
+            cp -r "$GITHUB_WORKSPACE/site-content"/* "$GITHUB_WORKSPACE/target-repo/" || {
+              echo "Failed to copy files"
+              exit 1
+            }
+          fi
           
-          fixed = 0
-          for html in Path('.').rglob('*.html'):
-              fixed += fix_html(html)
+          # Verify file count matches
+          DEST_FILES=$(find "$GITHUB_WORKSPACE/target-repo" -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
+          echo "Deployed files: $DEST_FILES"
           
-          print(f"✅ Fixed {fixed} HTML files")
-          PYTHON_SCRIPT
+          if [ $SOURCE_FILES -ne $DEST_FILES ]; then
+            echo "⚠️ CRITICAL: File count mismatch (source: $SOURCE_FILES, dest: $DEST_FILES)"
+            exit 1
+          fi
           
-          python3 fix_paths.py
+          echo "deployed_files=${DEST_FILES}" >> $GITHUB_OUTPUT
+          echo "Files copied successfully"
 
-      - name: Upload to GitHub Pages
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: site-content
+      # Step 10: Fix paths for GitHub Pages
+      - name: Fix paths
+        working-directory: target-repo
+        env:
+          BASE_HREF: ${{ steps.inputs.outputs.base_href }}
+        run: |
+          set -e
+          echo "Fixing paths for GitHub Pages..."
+          echo "Using BASE_HREF: ${BASE_HREF}"
+          
+          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.py" ]; then
+            echo "fix-paths.py script not found"
+            exit 1
+          fi
+          
+          if ! python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.py"; then
+            echo "Path fixing failed - rolling back"
+            git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
+            exit 1
+          fi
+          
+          echo "Paths fixed successfully"
 
-      - name: Deploy to GitHub Pages  
-        id: deployment
-        uses: actions/deploy-pages@v4
+      # Step 10.5: Fix static site issues (WordPress exports)
+      - name: Fix static site issues
+        working-directory: target-repo
+        run: |
+          set -e
+          echo "Applying static site fixes..."
+          
+          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py" ]; then
+            echo "⚠️ fix-static-site.py not found, skipping static site fixes"
+          else
+            if ! python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py"; then
+              echo "Static site fixing failed - rolling back"
+              git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
+              exit 1
+            fi
+            
+            echo "✅ Static site fixes applied"
+          fi
+
+      # Step 11: Validate deployment
+      - name: Validate deployment
+        working-directory: target-repo
+        env:
+          BASE_HREF: ${{ steps.inputs.outputs.base_href }}
+        run: |
+          echo "Validating deployment..."
+          
+          if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py" ]; then
+            echo "validate-deploy.py not found, skipping validation"
+          else
+            if ! python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py"; then
+              echo "Validation failed - rolling back"
+              git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}
+              exit 1
+            fi
+          fi
+          
+          echo "Validation completed"
+
+      # Step 12: Commit and push
+      - name: Commit and push
+        id: commit
+        working-directory: target-repo
+        run: |
+          git add -A
+          
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          
+          git commit -m "chore: deploy website"
+          git push origin ${{ github.event.inputs.target_branch }}
+          
+          COMMIT_SHA=$(git rev-parse HEAD)
+          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "Deployment successful!"
+          echo "Commit: ${COMMIT_SHA}"
+
+      # Step 13: Deployment summary
+      - name: Deployment summary
+        if: always()
+        run: |
+          echo "# Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "## ✅ Status: SUCCESS" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Details" >> $GITHUB_STEP_SUMMARY
+            echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Repository | ${{ steps.inputs.outputs.target_repo }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Branch | ${{ github.event.inputs.target_branch }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Commit | ${{ steps.commit.outputs.commit_sha }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Files | ${{ steps.copy.outputs.deployedfiles }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Size | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Base href | ${{ steps.inputs.outputs.base_href }} |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Status: FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Rollback to: ${{ steps.snapshot.outputs.snapshot_sha }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Deployed: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
