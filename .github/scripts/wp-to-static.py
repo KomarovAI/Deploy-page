@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""WordPress to Static Site Converter."""
+"""WordPress to Static Site Converter with auto-detection."""
 
 import sys
 import os
 import shutil
 from pathlib import Path
 from typing import Dict, List, Set, Optional
+from collections import Counter
 import re
+from urllib.parse import urlparse
 
 try:
     from bs4 import BeautifulSoup, Tag
@@ -43,13 +45,75 @@ class WordPressDestroyer:
     
     def __init__(self, base_path: str = "/", original_domain: str = ""):
         self.base_path = base_path.rstrip('/')
-        self.original_domain = original_domain.rstrip('/')
+        self.original_domain = original_domain.rstrip('/') if original_domain else None
         self.converted = 0
         self.cleaned_scripts = 0
         self.cleaned_styles = 0
         self.converted_absolute_urls = 0
         self.css_files: Set[str] = set()
         self.js_files: Set[str] = set()
+    
+    def auto_detect_domain(self, html_files: List[Path]) -> Optional[str]:
+        """Auto-detect original domain from HTML files."""
+        domains = []
+        
+        # Sample up to 10 HTML files
+        sample_files = html_files[:min(10, len(html_files))]
+        
+        for html_file in sample_files:
+            try:
+                content = html_file.read_text(encoding='utf-8', errors='ignore')
+                soup = BeautifulSoup(content, 'lxml')
+                
+                # Check canonical URL
+                canonical = soup.find('link', rel='canonical', href=True)
+                if canonical:
+                    parsed = urlparse(canonical['href'])
+                    if parsed.scheme and parsed.netloc:
+                        domains.append(f"{parsed.scheme}://{parsed.netloc}")
+                
+                # Check og:url
+                og_url = soup.find('meta', property='og:url', content=True)
+                if og_url:
+                    parsed = urlparse(og_url['content'])
+                    if parsed.scheme and parsed.netloc:
+                        domains.append(f"{parsed.scheme}://{parsed.netloc}")
+                
+                # Extract domains from absolute URLs in content
+                for tag in soup.find_all(['a', 'img', 'link', 'script'], href=True):
+                    url = tag.get('href') or tag.get('src')
+                    if url and url.startswith(('http://', 'https://')):
+                        parsed = urlparse(url)
+                        if parsed.netloc:
+                            domains.append(f"{parsed.scheme}://{parsed.netloc}")
+                
+                for tag in soup.find_all(['img', 'script'], src=True):
+                    url = tag['src']
+                    if url.startswith(('http://', 'https://')):
+                        parsed = urlparse(url)
+                        if parsed.netloc:
+                            domains.append(f"{parsed.scheme}://{parsed.netloc}")
+                
+            except Exception:
+                continue
+        
+        if not domains:
+            return None
+        
+        # Find most common domain
+        domain_counts = Counter(domains)
+        most_common = domain_counts.most_common(1)[0][0]
+        
+        # Filter out CDNs and external domains
+        cdn_patterns = ['googleapis', 'gstatic', 'cloudflare', 'jsdelivr', 'unpkg', 'cdnjs']
+        filtered = [d for d in domain_counts.keys() 
+                   if not any(pattern in d.lower() for pattern in cdn_patterns)]
+        
+        if filtered:
+            # Return most common non-CDN domain
+            return Counter({d: domain_counts[d] for d in filtered}).most_common(1)[0][0]
+        
+        return most_common
     
     def is_whitelisted(self, url: str) -> bool:
         if not url:
@@ -288,12 +352,6 @@ class WordPressDestroyer:
     def run(self) -> int:
         cwd = Path.cwd()
         
-        print(f"\n🔥 WORDPRESS DESTROYER")
-        print(f"Base path: {self.base_path}")
-        if self.original_domain:
-            print(f"Original domain: {self.original_domain}")
-        print("=" * 60)
-        
         html_files = [
             f for f in cwd.rglob('*.html')
             if '.git' not in f.parts and '.github' not in f.parts
@@ -303,6 +361,21 @@ class WordPressDestroyer:
             print("⚠️ No HTML files found")
             return 1
         
+        # Auto-detect domain if not provided
+        if not self.original_domain:
+            print("🔍 Auto-detecting original domain...")
+            detected = self.auto_detect_domain(html_files)
+            if detected:
+                self.original_domain = detected
+                print(f"✅ Detected: {self.original_domain}")
+            else:
+                print("⚠️ Could not detect original domain - skipping absolute URL conversion")
+        
+        print(f"\n🔥 WORDPRESS DESTROYER")
+        print(f"Base path: {self.base_path}")
+        if self.original_domain:
+            print(f"Original domain: {self.original_domain}")
+        print("=" * 60)
         print(f"Found {len(html_files)} HTML files\n")
         
         for html_file in html_files:
