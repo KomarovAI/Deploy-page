@@ -26,10 +26,6 @@ on:
         description: 'Base path for GitHub Pages (e.g. /archived-sites)'
         required: false
         default: '/archived-sites'
-      original_domain:
-        description: 'Original domain to convert (e.g. https://example.com)'
-        required: false
-        default: 'https://www.caterkitservices.com'
 
 jobs:
   deploy:
@@ -175,11 +171,10 @@ jobs:
           echo "deployed_files=${DEST_FILES}" >> $GITHUB_OUTPUT
           echo "✅ Copied ${DEST_FILES} files"
 
-      - name: Convert WordPress
+      - name: Convert WordPress (auto-detect domain)
         working-directory: target-repo
         env:
           BASE_PATH: ${{ github.event.inputs.base_path }}
-          ORIGINAL_DOMAIN: ${{ github.event.inputs.original_domain }}
         run: |
           python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/wp-to-static.py"
 
