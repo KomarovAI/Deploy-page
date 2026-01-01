@@ -145,15 +145,60 @@ class WordPressDestroyer:
         return "Page"
     
     def extract_content(self, soup: BeautifulSoup) -> Optional[Tag]:
-        selectors = ['main', '.entry-content', 'article', '#content', '.site-content', 'body']
+        """FIXED: правильное извлечение без вложенности."""
+        selectors = ['main', '.entry-content', 'article', '#content', '.site-content']
+        
         for selector in selectors:
             content = soup.select_one(selector)
             if content:
-                content_copy = BeautifulSoup(str(content), 'lxml').find()
-                for junk in content_copy.select('.wp-block-code, .sharedaddy, .jp-relatedposts'):
+                # FIX: используем extract() вместо str() + BeautifulSoup()
+                clean_content = content.extract()
+                
+                # FIX: Удаляем вложенные html/body/head
+                for nested_tag in clean_content.find_all(['html', 'body', 'head']):
+                    nested_tag.unwrap()
+                
+                # Удаляем мусор
+                for junk in clean_content.select('.wp-block-code, .sharedaddy, .jp-relatedposts, script, style, noscript'):
                     junk.decompose()
-                return content_copy
+                
+                return clean_content
+        
+        # Fallback: берём body и очищаем
+        body = soup.find('body')
+        if body:
+            body_copy = body.extract()
+            for nested in body_copy.find_all(['html', 'body', 'head']):
+                nested.unwrap()
+            for junk in body_copy.select('script, style, noscript'):
+                junk.decompose()
+            return body_copy
+        
         return None
+    
+    def fix_lazy_load_images(self, content: Tag) -> None:
+        """FIX: Конвертация lazy-load → обычные изображения."""
+        for img in content.find_all('img'):
+            # data-src → src
+            if img.get('data-src'):
+                img['src'] = img['data-src']
+                del img['data-src']
+            
+            # data-srcset → srcset
+            if img.get('data-srcset'):
+                img['srcset'] = img['data-srcset']
+                del img['data-srcset']
+            
+            # Удаляем другие lazy-атрибуты
+            for attr in ['data-src-webp', 'data-srcset-webp', 'data-eio', 'data-eio-rwidth', 'data-eio-rheight']:
+                if img.get(attr):
+                    del img[attr]
+            
+            # Удаляем lazy классы
+            if img.get('class'):
+                img['class'] = [c for c in img['class'] if 'lazy' not in c.lower()]
+                if not img['class']:
+                    del img['class']
     
     def collect_css(self, soup: BeautifulSoup) -> List[str]:
         css_files = []
@@ -298,6 +343,9 @@ class WordPressDestroyer:
             content = self.extract_content(soup)
             if not content:
                 return False
+            
+            # FIX: Конвертируем lazy-load изображения
+            self.fix_lazy_load_images(content)
             
             self.fix_paths_in_content(content)
             css_files = self.collect_css(soup)
