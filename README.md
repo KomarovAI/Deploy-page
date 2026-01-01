@@ -18,6 +18,11 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo
 
 # Subpath deployment  
 gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_path="/project"
+
+# Convert absolute URLs
+gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo \
+  -f base_path="/archived-sites" \
+  -f original_domain="https://www.example.com"
 ```
 
 ---
@@ -63,42 +68,62 @@ fi
 **Before:** Warning only + might leak old files  
 **After:** Hard failure + guaranteed clean slate
 
-### 🔗 Smart URL Rewriting
+### 🔗 Smart URL Rewriting (v3.3.0)
 
-**CRITICAL FIX:** Anchor and query string handling:
+**NEW:** Automatic conversion of absolute URLs from original domain!
 
 ```python
-# OLD (broken):
-"/page#section" → "/page/#section"  # Wrong!
+# Input site:
+<a href="https://www.example.com/page">Link</a>
+<img src="https://www.example.com/image.jpg">
 
-# NEW (correct):
-"/page#section" → "/page.html#section"  # ✅
-"/page?q=1#top" → "/page.html?q=1#top"  # ✅
+# After conversion (with base_path="/archived-sites"):
+<a href="/archived-sites/page.html">Link</a>
+<img src="/archived-sites/image.jpg">
 ```
 
-**Now handles:**
+**Features:**
+- ✅ Converts absolute URLs: `https://domain.com/path` → `/base-path/path`
+- ✅ Preserves external links (different domains)
+- ✅ Handles protocol-relative URLs: `//domain.com/path`
 - ✅ Anchors: `#section`
 - ✅ Query strings: `?param=value`
 - ✅ Combined: `?q=1#top`
 - ✅ data-* attributes: `data-src`, `data-bg`, `data-background`
+
+**Before:**
+```html
+<!-- BROKEN - points to dead domain -->
+<a href="https://www.caterkitservices.com/sectors/restaurants/">Restaurants</a>
+```
+
+**After:**
+```html
+<!-- FIXED - relative path -->
+<a href="/archived-sites/sectors/restaurants/">Restaurants</a>
+```
 
 ### ⚙️ Parametrized Configuration
 
 **CRITICAL FIX:** No more hardcoded paths!
 
 ```yaml
-# NEW workflow input:
+# NEW workflow inputs:
 base_path:
   description: 'Base path for GitHub Pages'
   default: '/archived-sites'
+original_domain:
+  description: 'Original domain to convert'
+  default: ''  # e.g. https://example.com
 ```
 
 ```python
-# Passed to Python script via env var:
+# Passed to Python script via env vars:
 base_path = os.getenv('BASE_PATH', '/')
+original_domain = os.getenv('ORIGINAL_DOMAIN', '')
 ```
 
-**Result:** Single repo works for ANY GitHub Pages path!
+**Result:** Single repo works for ANY GitHub Pages path AND domain!
 
 ---
 
@@ -130,9 +155,31 @@ from lxml import etree         # 3x faster parser
 | `run_id` | ✅ | - | Source workflow run ID |
 | `target_repo` | ✅ | - | Deploy destination |
 | `base_path` | ❌ | `/archived-sites` | GitHub Pages path |
+| `original_domain` | ❌ | `` | Original site domain (e.g. `https://example.com`) |
 | `artifact_name` | ❌ | `*-{run_id}` | Artifact pattern |
 | `source_repo` | ❌ | `KomarovAI/web-crawler` | Source repo |
 | `target_branch` | ❌ | `main` | Target branch |
+
+### original_domain Parameter
+
+**When to use:**
+- Site has absolute URLs (e.g., `https://www.example.com/page`)
+- You want links to work on GitHub Pages
+- Converting WordPress/CMS sites
+
+**Example:**
+```bash
+gh workflow run deploy.yml \
+  -f run_id=12345 \
+  -f target_repo=user/archived-sites \
+  -f base_path="/archived-sites" \
+  -f original_domain="https://www.caterkitservices.com"
+```
+
+**Result:**
+- All `https://www.caterkitservices.com/X` → `/archived-sites/X`
+- External links preserved (e.g., `https://google.com`)
+- Logs show conversion count: `🔗 Converted 247 absolute URLs`
 
 ---
 
@@ -167,6 +214,7 @@ fi
 - ✅ Uploads (wp-content/uploads)
 
 **Fixes:**
+- ✅ Absolute URLs: `https://domain.com/page` → `/base-path/page.html`
 - ✅ Anchors: `/page#section` → `/page.html#section`
 - ✅ Query strings: `/page?q=1` → `/page.html?q=1`
 - ✅ data-* attributes for lazy loading
@@ -247,10 +295,24 @@ git push origin main
 | Deploy fails mid-process | ✅ **FIXED** - atomic deploy + auto-rollback |
 | Hardcoded `/archived-sites` | ✅ **FIXED** - now uses `base_path` input |
 | data-src not rewritten | ✅ **FIXED** - handles data-* attributes |
+| **Absolute URLs broken** | ✅ **FIXED** - set `original_domain` parameter |
 
 ---
 
 ## 📊 Version History
+
+### v3.3.0 (2026-01-01) — Absolute URL Conversion 🔗
+
+**Added:**
+- ✨ `original_domain` workflow input
+- ✨ Automatic absolute URL conversion: `https://domain.com/path` → `/base-path/path`
+- ✨ Protocol-relative URL support: `//domain.com/path`
+- ✨ External link preservation (different domains)
+- ✨ Conversion counter in logs: `🔗 Converted N absolute URLs`
+
+**Fixed:**
+- ✅ Links to original domain now work in GitHub Pages
+- ✅ Mixed absolute/relative URLs handled correctly
 
 ### v3.2.0 (2026-01-01) — Atomic Deploy + Critical Fixes 🔥
 
@@ -294,4 +356,4 @@ MIT
 
 ---
 
-**⚡ v3.2.0** | Atomic deploys | Auto-rollback | Production-ready
+**⚡ v3.3.0** | Atomic deploys | Auto-rollback | Absolute URL conversion | Production-ready
