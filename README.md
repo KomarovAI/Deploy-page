@@ -31,6 +31,8 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 - **Query String Preservation** - `href="/page?q=1"` → `href="./page.html?q=1"`
 - **Anchor Preservation** - `href="/page#top"` → `href="./page.html#top"`
 - **Python-Based Processing** - Robust regex handling for complex patterns
+- **WordPress Static Site Fixes** - 🆕 Removes legacy JS conflicts
+- **Navigation Click Handler Fix** - 🆕 Fast clicks work properly
 - **Idempotent Scripts** - Safe to run multiple times
 - **Automatic Rollback** - Git snapshot restoration on failure
 - **Soft/Strict Validation** - Choose between warnings or hard failures
@@ -49,9 +51,11 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 | `target_branch` | ❌ | `main` | Target branch |
 | `base_href` | ❌ | `/` | Base path (`/` or `/project/`) |
 
-## 🔧 Path Rewriting Logic
+## 🔧 Processing Pipeline
 
-**fix-paths.sh** transforms URLs for GitHub Pages compatibility:
+### 1. Path Rewriting (fix-paths.sh)
+
+Transforms URLs for GitHub Pages compatibility:
 
 ```html
 <!-- Before -->
@@ -85,29 +89,126 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 - ✅ Handles `href`, `src`, `url()` in CSS
 - ✅ Detailed per-file logging
 
-**Processing:**
-1. Domain-absolute URLs → relative: `https://domain.com/path` → `./path`
-2. Root-relative → relative: `/path` → `./path`
-3. Add `.html` to page links: `./services` → `./services.html` (Python)
-4. Clean up double extensions: `page.html.html` → `page.html`
+### 2. Static Site Fixes (fix-static-site.sh) 🆕
 
-## 🛡️ Validation System
+**For WordPress static exports** - removes legacy JavaScript conflicts:
 
-**validate-deploy.sh** performs comprehensive checks:
+#### Problems Solved
 
-### Validation Modes
+❌ **Fast clicks not working** - WordPress themes hijack click events  
+❌ **Broken navigation** - `e.preventDefault()` blocks links  
+❌ **Path conflicts** - Autoptimize cache expects WordPress URLs  
+❌ **404 errors** - Legacy admin files (`wp-login.php`, `xmlrpc.php`)
 
-#### 🟢 Soft Mode (Default)
-- Root-relative paths → **Warning** (⚠️ )
-- Deployment proceeds
-- Best for iterative development
+#### What It Does
 
-#### 🔴 Strict Mode
-- Root-relative paths → **Error** (❌)
-- Deployment fails and rolls back
-- Enable with: `STRICT_VALIDATION=true`
+1. **Removes Legacy JavaScript:**
+   - Deletes `wp-content/cache/autoptimize/` (path conflicts)
+   - Removes `comment-reply.js` (not needed on static sites)
+   - Cleans `wp-embed.js`, `customize-*.js`
 
-### Checks Performed
+2. **Flags Theme Conflicts:**
+   - Scans theme JS for `e.preventDefault()` usage
+   - Reports files that might interfere with navigation
+
+3. **Injects Click Handler Fix:**
+   - Adds navigation override script to all HTML files
+   - Executes in capturing phase (before WordPress JS)
+   - Uses `stopImmediatePropagation()` to disable legacy handlers
+   - Enables fast, reliable clicks on all `.html` links
+
+4. **Cleans WordPress Artifacts:**
+   - Removes `xmlrpc.php` (security risk)
+   - Removes `wp-cron.php` (non-functional)
+   - Cleans `wp-login*` files (causes 404s)
+
+#### Example Output
+
+```bash
+🔧 Fixing static site issues (WordPress exports)...
+
+📦 Step 1: Removing legacy WordPress JavaScript...
+════════════════════════════════════════════════
+  ✓ Removed Autoptimize cache
+  ✓ Removed comment-reply.js
+  📝 Total legacy files removed: 2
+
+📦 Step 2: Patching theme JavaScript...
+════════════════════════════════════════════════
+  ⚠️  Found preventDefault in: wp-content/themes/bloc/assets/js/apps.js
+  → Manual review recommended for production
+  📝 Theme JS files flagged: 1
+
+📦 Step 3: Injecting click handler fix...
+════════════════════════════════════════════════
+  Processing 36 HTML files...
+  
+  ✓ index.html: navigation fix injected
+  ✓ services.html: navigation fix injected
+  → contact.html: already patched
+  
+  📝 HTML files patched: 35 / 36
+
+📦 Step 4: Cleaning WordPress artifacts...
+════════════════════════════════════════════════
+  ✓ Removed xmlrpc.php
+  ✓ Removed wp-cron.php
+  📝 WordPress artifacts removed: 2
+
+✅ Static site fixes complete!
+════════════════════════════════════════════════
+📊 Summary:
+  • Legacy JS files removed: 2
+  • Theme JS files flagged: 1
+  • HTML files patched: 35
+  • WordPress artifacts removed: 2
+════════════════════════════════════════════════
+
+✨ Navigation fixes applied - fast clicks should now work!
+```
+
+#### The Navigation Fix (Technical Details)
+
+```javascript
+// Injected into every HTML file before </body>
+document.addEventListener('click', function(e) {
+  var link = e.target.closest('a');
+  if (!link) return;
+  
+  var href = link.getAttribute('href');
+  var isInternal = href.indexOf('.html') !== -1 && 
+                   href.indexOf('://') === -1;
+  
+  if (isInternal) {
+    e.stopImmediatePropagation(); // 🔥 Kill ALL other handlers
+    
+    if (!e.ctrlKey && !e.metaKey && e.button === 0) {
+      e.preventDefault();
+      window.location.href = link.href; // Simple, reliable navigation
+    }
+  }
+}, true); // true = capturing phase (executes FIRST)
+```
+
+**Why This Works:**
+- ✅ Executes **before** WordPress legacy handlers
+- ✅ `stopImmediatePropagation()` prevents other listeners
+- ✅ Simple `window.location.href` - no animations or delays
+- ✅ Respects Ctrl/Cmd+Click for new tabs
+- ✅ Idempotent - checks for "Static Site Navigation Fix" comment
+
+### 3. Validation (validate-deploy.sh)
+
+Performs comprehensive checks:
+
+#### Validation Modes
+
+🟢 **Soft Mode (Default)** - Root-relative paths → Warning (⚠️)  
+🔴 **Strict Mode** - Root-relative paths → Error (❌) + Rollback
+
+Enable strict: Set `STRICT_VALIDATION=true` in workflow
+
+#### Checks Performed
 
 | Check | Type | Failure Behavior |
 |-------|------|------------------|
@@ -118,7 +219,7 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 | Base href in subpath | Warning | Continue |
 | Double slashes | Warning | Continue |
 
-### Detailed Logging
+#### Detailed Logging
 
 ```bash
 # Logs saved to:
@@ -126,17 +227,6 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 
 # JSON report with all issues:
 /tmp/path-issues-detail.json
-```
-
-**Example JSON output:**
-```json
-[
-  {
-    "file": "./index.html",
-    "bad_hrefs": ["/about", "/contact"],
-    "bad_srcs": ["/images/logo.png"]
-  }
-]
 ```
 
 ## 📁 Repository Structure
@@ -147,6 +237,7 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 │   └── deploy.yml          # Main deployment workflow
 └── scripts/
     ├── fix-paths.sh        # Path rewriting (v2.7.1+ with Python)
+    ├── fix-static-site.sh  # 🆕 WordPress static export fixes
     └── validate-deploy.sh  # Validation (soft/strict modes)
 ```
 
@@ -162,6 +253,9 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
+| Fast clicks don't work | WordPress legacy JS | ✅ **FIXED** by fix-static-site.sh |
+| Navigation broken | `e.preventDefault()` | ✅ **FIXED** by click handler injection |
+| 404 on wp-login.php | WordPress artifacts | ✅ **FIXED** by artifact cleanup |
 | Broken CSS/JS | Absolute paths | Check `base_href` matches GitHub Pages URL |
 | Links with `?query` broken | Old fix-paths (<v2.7) | Update to v2.7.1+ |
 | Links with `#anchor` broken | Old fix-paths (<v2.7) | Update to v2.7.1+ |
@@ -182,6 +276,30 @@ env:
 ```
 
 ## 📊 Changelog
+
+### v2.8 (2026-01-01) — WordPress Static Site Fixes 🎉
+
+**NEW SCRIPT: fix-static-site.sh**
+- ✨ **NEW:** Removes Autoptimize cache (path conflicts)
+- ✨ **NEW:** Removes comment-reply.js, wp-embed.js
+- ✨ **NEW:** Injects click handler fix (fast clicks work!)
+- ✨ **NEW:** Uses `stopImmediatePropagation()` to kill legacy handlers
+- ✨ **NEW:** Cleans WordPress artifacts (xmlrpc.php, wp-cron.php)
+- ✨ **NEW:** Flags theme JS with `preventDefault()` conflicts
+- ✅ Idempotent - checks for existing fixes before injecting
+- ✅ Detailed logging with emoji formatting
+- ✅ Summary statistics
+
+**Workflow:**
+- ✅ Added Step 10.5: Fix static site issues
+- ✅ Runs between path fixing and validation
+- ✅ Rollback support on failure
+
+**Why This Matters:**
+- 🐛 **Fixes:** Fast clicks not working on WordPress static exports
+- 🐛 **Fixes:** Navigation broken by `e.preventDefault()`
+- 🐛 **Fixes:** 404 errors on legacy WordPress files
+- ⚡ **Result:** Reliable, fast navigation on static sites
 
 ### v2.7.1 (2026-01-01) — CRITICAL Bugfix ⚠️
 
