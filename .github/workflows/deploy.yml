@@ -136,40 +136,58 @@ jobs:
           echo "🧹 Creating clean deploy branch..."
           git checkout -b deploy-temp
           
-          # Remove ALL except .git and .github
+          # Remove ALL directories and files except .git and .github
           find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name '.github' -exec rm -rf {} +
           
-          # CRITICAL: Verify cleanup
+          # CRITICAL: Verify cleanup - должны остаться только .git и .github
           REMAINING=$(find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
           if [ $REMAINING -ne 0 ]; then
             echo "❌ FATAL: $REMAINING files remain!"
             find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*'
             exit 1
           fi
-          echo "✅ Repository cleaned"
+          
+          REMAINING_DIRS=$(find . -mindepth 1 -maxdepth 1 -type d ! -name '.git' ! -name '.github' | wc -l)
+          if [ $REMAINING_DIRS -ne 0 ]; then
+            echo "❌ FATAL: $REMAINING_DIRS directories remain!"
+            find . -mindepth 1 -maxdepth 1 -type d ! -name '.git' ! -name '.github'
+            exit 1
+          fi
+          
+          echo "✅ Repository cleaned: all content removed"
 
-      - name: Copy new site
+      - name: Copy new site (preserve directory structure)
         id: copy
         working-directory: target-repo
         run: |
           SOURCE_FILES=$(find "$GITHUB_WORKSPACE/site-content" -type f | wc -l)
           
           SUBDIRS=$(find "$GITHUB_WORKSPACE/site-content" -mindepth 1 -maxdepth 1 -type d | wc -l)
+          
           if [ $SUBDIRS -eq 1 ]; then
+            # Одна поддиректория - копируем саму директорию с сохранением имени
             SUBDIR=$(find "$GITHUB_WORKSPACE/site-content" -mindepth 1 -maxdepth 1 -type d | head -1)
-            cp -r "$SUBDIR"/* .
+            DIRNAME=$(basename "$SUBDIR")
+            
+            echo "📁 Deploying site to: ${DIRNAME}/"
+            cp -r "$SUBDIR" "./${DIRNAME}"
+            
+            DEST_FILES=$(find "./${DIRNAME}" -type f | wc -l)
           else
+            # Несколько поддиректорий или файлы - копируем как есть
+            echo "📁 Deploying multiple sites"
             cp -r "$GITHUB_WORKSPACE/site-content"/* .
+            
+            DEST_FILES=$(find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
           fi
           
-          DEST_FILES=$(find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
           if [ $SOURCE_FILES -ne $DEST_FILES ]; then
-            echo "❌ File count mismatch"
+            echo "❌ File count mismatch: source=$SOURCE_FILES, dest=$DEST_FILES"
             exit 1
           fi
           
           echo "deployed_files=${DEST_FILES}" >> $GITHUB_OUTPUT
-          echo "✅ Copied ${DEST_FILES} files"
+          echo "✅ Copied ${DEST_FILES} files with directory structure preserved"
 
       - name: Convert WordPress (auto-detect domain)
         working-directory: target-repo
@@ -181,10 +199,6 @@ jobs:
       - name: Validate
         working-directory: target-repo
         run: |
-          if [ ! -f "index.html" ]; then
-            echo "❌ index.html missing!"
-            exit 1
-          fi
           HTML_COUNT=$(find . -name '*.html' -type f | wc -l)
           if [ $HTML_COUNT -eq 0 ]; then
             echo "❌ No HTML files!"
