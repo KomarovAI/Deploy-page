@@ -173,27 +173,27 @@ jobs:
           echo "snapshot_sha=${SNAPSHOT_SHA}" >> $GITHUB_OUTPUT
           echo "Snapshot created: ${SNAPSHOT_SHA}"
 
-      # Step 8: Clean repository (full wipe except .github)
+      # Step 8: COMPLETE CLEANUP - Remove ALL files except .git and .github
       - name: Clean repository
         working-directory: target-repo
         run: |
-          echo "🧹 Cleaning repository..."
+          echo "🧹 FULL REPOSITORY CLEANUP..."
           
           # Count files before cleanup
-          BEFORE_COUNT=$(git ls-files | grep -v '^.github' | wc -l)
+          BEFORE_COUNT=$(find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
+          echo "Files before cleanup: $BEFORE_COUNT"
           
-          # Remove ALL tracked files except .github (QUIET MODE)
-          git ls-files | grep -v '^.github' | xargs -r git rm -rf --quiet 2>/dev/null || true
-          
-          # Remove ALL untracked files/dirs except .git (QUIET MODE)
+          # CRITICAL: Remove EVERYTHING except .git and .github (filesystem level)
           find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name '.github' -exec rm -rf {} + 2>/dev/null || true
           
-          # COMMIT THE DELETION (QUIET MODE)
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: clean repository before deploy" --quiet 2>/dev/null || true
-            echo "✅ Repository cleaned ($BEFORE_COUNT files removed)"
+          # Verify cleanup
+          AFTER_COUNT=$(find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
+          
+          if [ $AFTER_COUNT -eq 0 ]; then
+            echo "✅ Repository cleaned: $BEFORE_COUNT files removed"
           else
-            echo "✅ Repository already clean"
+            echo "⚠️ Warning: $AFTER_COUNT files remaining after cleanup"
+            find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | head -10
           fi
 
       # Step 9: Copy website files TO ROOT
@@ -296,29 +296,40 @@ jobs:
             fi
           fi
 
-      # Step 12: Commit and push
+      # Step 12: Commit and push EVERYTHING in ONE commit
       - name: Commit and push
         id: commit
         working-directory: target-repo
         run: |
-          echo "📤 Committing changes..."
+          echo "📤 Staging all changes..."
           
-          git add -A --verbose 2>&1 | head -5
+          # Stage ALL changes (additions, modifications, deletions)
+          git add -A
           
+          # Check if there are changes
           if git diff --cached --quiet; then
-            echo "⚠️ No changes to commit"
-            exit 0
+            echo "⚠️ No changes detected (this should NOT happen after full cleanup)"
+            git status
+            exit 1
           fi
           
-          CHANGED_FILES=$(git diff --cached --numstat | wc -l)
+          # Count changes
+          ADDED=$(git diff --cached --numstat | awk '{print $1}' | grep -c '^[0-9]' || echo 0)
+          DELETED=$(git diff --cached --numstat | awk '{print $2}' | grep -c '^[0-9]' || echo 0)
+          CHANGED_FILES=$(git diff --cached --name-only | wc -l)
           
-          git commit -m "chore: deploy website" --quiet
+          echo "Changes: +${ADDED} -${DELETED} (~${CHANGED_FILES} files)"
+          
+          # Commit with descriptive message
+          git commit -m "deploy: fresh deployment from run ${{ steps.inputs.outputs.run_id }}" --quiet
+          
+          # Push to remote
           git push origin ${{ github.event.inputs.target_branch }} --quiet
           
           COMMIT_SHA=$(git rev-parse HEAD)
           SHORT_SHA=$(git rev-parse --short HEAD)
           echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
-          echo "✅ Deployed ${CHANGED_FILES} files (${SHORT_SHA})"
+          echo "✅ Deployed: ${CHANGED_FILES} files (${SHORT_SHA})"
 
       # Step 13: Deployment summary
       - name: Deployment summary
