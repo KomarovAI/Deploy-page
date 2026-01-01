@@ -32,3 +32,8 @@ npm-debug.log*
 # Testing
 coverage/
 .nyc_output/
+
+# GitHub Actions artifacts (do not commit)
+deploy-page-repo/
+site-content/
+target-repo/
