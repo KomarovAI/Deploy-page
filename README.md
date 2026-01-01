@@ -18,14 +18,21 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo
 
 # Subpath deployment
 gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href="/project/"
+
+# Manual trigger from GitHub UI
+# Actions → Deploy Website to GitHub Pages → Run workflow
 ```
 
 ## 🎯 Core Features
 
 - **Artifact Orchestration** - Pull from any GitHub Actions run
 - **Smart Path Rewriting** - Absolute → relative (GitHub Pages compatible)
+- **Query String Preservation** - `href="/page?q=1"` → `href="./page.html?q=1"`
+- **Anchor Preservation** - `href="/page#top"` → `href="./page.html#top"`
 - **Idempotent Scripts** - Safe to run multiple times
 - **Automatic Rollback** - Git snapshot restoration on failure
+- **Soft/Strict Validation** - Choose between warnings or hard failures
+- **Detailed Logging** - Per-file issue tracking with JSON exports
 - **Subpath Support** - Deploy to `/project/` paths
 - **Zero Config** - No local setup required
 
@@ -47,44 +54,93 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 ```html
 <!-- Before -->
 <link href="/styles.css">
+<a href="/about?tab=team#intro">About</a>
 <script src="https://example.com/app.js">
 
-<!-- After (root) -->
+<!-- After (root deployment) -->
 <link href="./styles.css">
+<a href="./about.html?tab=team#intro">About</a>
 <script src="./app.js">
 
 <!-- After (subpath /project/) -->
 <link href="/project/styles.css">
+<a href="/project/about.html?tab=team#intro">About</a>
 <script src="/project/app.js">
 ```
 
-**Features:**
+**Key Features:**
+- ✅ Preserves query strings: `page?query=value`
+- ✅ Preserves anchors: `page#section`
+- ✅ Adds `.html` before queries: `page?q=1` → `page.html?q=1`
 - ✅ Idempotent (safe multiple runs)
-- ✅ No double slashes (`/project//path` → `/project/path`)
-- ✅ Accurate replacement counting
+- ✅ No double slashes
+- ✅ Accurate change counting with diff-based tracking
 - ✅ Handles `href`, `src`, `url()` in CSS
+- ✅ Detailed per-file logging
 
-## 🛡️ Validation
+**Processing:**
+1. Domain-absolute URLs → relative: `https://domain.com/path` → `./path`
+2. Root-relative → relative: `/path` → `./path`
+3. Add `.html` to page links: `./services` → `./services.html`
+4. Clean up double extensions: `page.html.html` → `page.html`
 
-**validate-deploy.sh** checks:
-- File count integrity
-- Double slash detection (indicates bugs)
-- Base href presence for subpath
-- Broken absolute paths
-- Directory structure correctness
+## 🛡️ Validation System
 
-**Validation modes:**
-- 🔴 **Hard fail** - Missing index.html, file count mismatch, double slashes
-- 🟡 **Soft warning** - Absolute paths in subpath deployment
+**validate-deploy.sh** performs comprehensive checks:
+
+### Validation Modes
+
+#### 🟢 Soft Mode (Default)
+- Root-relative paths → **Warning** (⚠️ )
+- Deployment proceeds
+- Best for iterative development
+
+#### 🔴 Strict Mode
+- Root-relative paths → **Error** (❌)
+- Deployment fails and rolls back
+- Enable with: `STRICT_VALIDATION=true`
+
+### Checks Performed
+
+| Check | Type | Failure Behavior |
+|-------|------|------------------|
+| `index.html` exists | Error | Rollback |
+| `index.html` > 100 bytes | Error | Rollback |
+| File count matches source | Error | Rollback |
+| Root-relative paths | Soft: Warn / Strict: Error | Continue / Rollback |
+| Base href in subpath | Warning | Continue |
+| Double slashes | Warning | Continue |
+
+### Detailed Logging
+
+```bash
+# Logs saved to:
+/tmp/validation-YYYYMMDD-HHMMSS.log
+
+# JSON report with all issues:
+/tmp/path-issues-detail.json
+```
+
+**Example JSON output:**
+```json
+[
+  {
+    "file": "./index.html",
+    "bad_hrefs": ["/about", "/contact"],
+    "bad_srcs": ["/images/logo.png"]
+  }
+]
+```
 
 ## 📁 Repository Structure
 
 ```
 .github/
-├── workflows/deploy.yml    # Main deployment workflow
+├── workflows/
+│   └── deploy.yml          # Main deployment workflow
 └── scripts/
-    ├── fix-paths.sh        # Path rewriting (idempotent)
-    └── validate-deploy.sh  # Deployment validation
+    ├── fix-paths.sh        # Path rewriting (v2.7+)
+    └── validate-deploy.sh  # Validation (soft/strict modes)
 ```
 
 **Note:** Repo contains ONLY workflows/scripts. No site content stored here.
@@ -93,19 +149,51 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 
 1. **Create PAT** with `contents:write` permission
 2. **Add secret** `EXTERNAL_REPO_PAT` to this repo
-3. **Run workflow** from Actions tab
+3. **Run workflow** from Actions tab or via `gh` CLI
 
 ## 🐛 Troubleshooting
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Broken CSS/JS | Absolute paths | Check `base_href` matches GitHub Pages URL |
+| Links with `?query` broken | Old fix-paths | Update to v2.7+ |
+| Links with `#anchor` broken | Old fix-paths | Update to v2.7+ |
 | Artifact not found | Invalid `run_id` | Verify run_id in source repo Actions |
 | Push failed: 403 | PAT permissions | Add `contents:write` to PAT |
-| Double slashes | Path fixing bug | Fixed in v2.6 (2026-01-01) |
+| Validation too strict | Default strict mode | Set `STRICT_VALIDATION=false` |
+| Want stricter validation | Default soft mode | Set `STRICT_VALIDATION=true` in workflow |
 | File count mismatch | Corrupted artifact | Re-run source workflow |
 
+### Debug Mode
+
+```bash
+# Enable detailed logging in workflow:
+env:
+  DEBUG: true
+  STRICT_VALIDATION: false  # or true for strict mode
+```
+
 ## 📊 Changelog
+
+### v2.7 (2026-01-01) — Major Improvements
+
+**fix-paths.sh:**
+- ✨ **NEW:** Query string preservation (`?query=value`)
+- ✨ **NEW:** Anchor preservation (`#section`)
+- ✨ **NEW:** Smart `.html` insertion before queries/anchors
+- ✅ Diff-based change tracking (accurate counts)
+- ✅ Per-file line change reporting
+- ✅ Better handling of edge cases
+
+**validate-deploy.sh:**
+- ✨ **NEW:** Soft validation mode (default)
+- ✨ **NEW:** Strict validation mode (`STRICT_VALIDATION=true`)
+- ✨ **NEW:** Timestamped log files (`/tmp/validation-*.log`)
+- ✨ **NEW:** JSON issue export (`/tmp/path-issues-detail.json`)
+- ✨ **NEW:** Per-file issue breakdown with examples
+- ✅ Shows first 5 issues per file
+- ✅ Counts JS files and more asset types
+- ✅ Better formatting with emojis
 
 ### v2.6 (2026-01-01) — Critical Bugfixes
 
