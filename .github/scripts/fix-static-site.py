@@ -102,7 +102,14 @@ class StaticSiteFixer:
                 base_name = html_file.stem
                 
                 # Create target folder: parent/base_name/
-                target_folder = cwd / parent_dir / base_name
+                # CRITICAL FIX: Ensure parent_dir is properly included in the path
+                if str(parent_dir) == '.':
+                    # File is in root directory
+                    target_folder = cwd / base_name
+                else:
+                    # File is in a subdirectory - preserve the full path
+                    target_folder = cwd / parent_dir / base_name
+                
                 target_folder.mkdir(parents=True, exist_ok=True)
                 
                 # Target file: parent/base_name/index.html
