@@ -110,6 +110,14 @@ jobs:
           path: deploy-page-repo
           fetch-depth: 1
 
+      # Step 2.5: Install Python dependencies
+      - name: Install Python dependencies
+        run: |
+          echo "📦 Installing Python dependencies..."
+          python3 -m pip install --upgrade pip
+          pip3 install beautifulsoup4 lxml rich
+          echo "✅ Dependencies installed successfully"
+
       # Step 3: Download artifact from source workflow
       - name: Download site archive
         uses: dawidd6/action-download-artifact@v12
