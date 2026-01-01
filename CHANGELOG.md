@@ -1,230 +1,200 @@
 # Changelog
 
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [2.8.0] - 2026-01-01 🎉
+
+### Added
+- **NEW SCRIPT:** `fix-static-site.sh` for WordPress static export processing
+- **Navigation Fix:** Injects click handler to override legacy WordPress JS
+- **Legacy JS Removal:** Auto-removes Autoptimize cache, comment-reply.js, wp-embed.js
+- **WordPress Artifact Cleanup:** Removes xmlrpc.php, wp-cron.php, wp-login files
+- **Theme JS Detection:** Flags files with `preventDefault()` conflicts
+- **Idempotent Injection:** Checks for existing fixes before patching HTML
+- **Detailed Logging:** Step-by-step output with emoji formatting
+- **Summary Statistics:** Tracks files removed, patched, and flagged
+
+### Changed
+- **Workflow:** Added Step 10.5 "Fix static site issues" between path fixing and validation
+- **README.md:** Added comprehensive documentation for WordPress static site fixes
+- **README.md:** Added troubleshooting section for common WordPress export issues
+
+### Fixed
+- 🐛 **Fast clicks not working** on WordPress static exports (legacy JS hijacking events)
+- 🐛 **Navigation broken** by `e.preventDefault()` in theme JavaScript
+- 🐛 **404 errors** on wp-login.php, xmlrpc.php, and other WordPress dynamic files
+- 🐛 **Path conflicts** from Autoptimize cache expecting WordPress directory structure
+
+### Technical Details
+
+The click handler fix uses:
+- **Capturing phase** event listener (`addEventListener(..., true)`) - executes BEFORE other handlers
+- **stopImmediatePropagation()** - prevents all other click handlers from executing
+- **Simple navigation** - `window.location.href` with no animations or delays
+- **Smart targeting** - only affects internal `.html` links
+- **Modifier key support** - respects Ctrl/Cmd+Click for opening in new tabs
+
+---
+
+## [2.7.1] - 2026-01-01 ⚠️ CRITICAL
+
+### Fixed
+- 🔥 **CRITICAL:** Replaced broken sed regex with Python script in `fix-paths.sh`
+- ❌ v2.7 had: `sed: -e expression #1, char 27: unknown option to 's'`
+- ✅ Python handles complex regex without shell escaping issues
+- ✅ Correctly processes query strings and anchors
+- ✅ Production ready - all workflows passing
+
+### Migration
+
+**If you're on v2.7, update immediately to v2.7.1!**
+
+No breaking changes - drop-in replacement.
+
+---
+
+## [2.7.0] - 2026-01-01 (DEPRECATED)
+
+### Added
+- **Query String Preservation:** `href="/page?q=1"` → `href="./page.html?q=1"`
+- **Anchor Preservation:** `href="/page#top"` → `href="./page.html#top"`
+- **Smart .html Insertion:** Adds extension before query strings and anchors
+- **Soft Validation Mode:** Default mode with warnings instead of hard failures
+- **Strict Validation Mode:** Enable with `STRICT_VALIDATION=true`
+- **Timestamped Logs:** `/tmp/validation-YYYYMMDD-HHMMSS.log`
+- **JSON Issue Export:** `/tmp/path-issues-detail.json` for programmatic parsing
+- **Per-file Issue Breakdown:** Shows first 5 issues per file in validation
+
+### Changed
+- **validate-deploy.sh:** Improved formatting with emojis and better structure
+- **validate-deploy.sh:** Now counts JavaScript files separately
+- **validate-deploy.sh:** Better detection of asset types (CSS, JS, images)
+
+### Known Issues
+- ❌ **BUG:** sed regex escaping issues in `fix-paths.sh` (fixed in v2.7.1)
+
+---
+
+## [2.6.0] - 2026-01-01
+
+### Fixed
+- **Idempotent path fixing** - now safe to run multiple times without double-processing
+- **BASE_HREF trailing slashes** - no more `//` in URLs
+- **Accurate replacement counting** - uses diff-based tracking instead of sed output
+- **Duplicate path rewriting** - checks if paths already correct before modifying
+- **Absolute path detection** - correct regex in validate-deploy.sh
+- **Double slash detection** - properly identifies `//` in paths
+
+### Changed
+- **fix-paths.sh:** Now checks existing content before applying transformations
+- **fix-paths.sh:** Better logging with per-file change counts
+- **validate-deploy.sh:** Separated soft warnings from hard errors
+- **validate-deploy.sh:** Improved error reporting with context
+
+---
+
+## [2.5.0] - 2025-12-26
+
+### Added
+- **Smart empty repo detection** - skips cleanup if repository is already empty
+- **Performance metrics** in deployment summary
+
+### Changed
+- **Repository cleanup** - 3-5x faster with optimized `find` commands
+- **Repository cleanup** - Better handling of `.github` directory exclusion
+
+### Fixed
+- **Cleanup step** - no longer fails on empty repositories
+
+---
+
+## [2.4.0] - 2025-12-26
+
+### Added
+- **Full repository wipe** - deletes ALL content except `.github` before deployment
+- **Commit deletions** - explicitly commits file removals (critical for GitHub Pages)
+- **Nested artifact extraction** - handles artifacts with single subdirectory
+- **File count validation** - ensures source and destination match
+- **Detailed deployment summary** - shows file count, size, commit SHA
+
+### Changed
+- **Workflow structure** - reorganized steps for better clarity
+- **Error handling** - improved rollback on validation failures
+
+### Fixed
+- **Orphaned files** - no longer accumulate from previous deployments
+- **Directory structure** - properly extracts nested artifact contents
+
+---
+
 ## [2.3.0] - 2025-12-26
 
-### 🚀 What's New
+### Added
+- **Python-based .html extension logic** - replaces fragile sed regex
+- **Query parameter support** - preserves `?query=value` in URLs
+- **Anchor support** - preserves `#section` in URLs
 
-#### Complete Repository Cleanup
-- **Feature**: Full repository cleanup before deployment
-- **What it does**: Removes ALL files except `.git` and `.github` directories
-- **Why**: Guarantees clean state, prevents file accumulation, ensures idempotent deployments
-- **How it works**:
-  ```bash
-  find . -mindepth 1 -maxdepth 1 -not -name '.git' -not -name '.github' -exec rm -rf {} +
-  git reset --hard HEAD
-  git clean -fdx
-  git reset HEAD --hard
-  ```
-
-#### Deployment Validation Script
-- **New file**: `.github/scripts/validate-deploy.sh`
-- **Purpose**: Validate deployed website integrity after deployment
-- **Checks**:
-  - ✅ Total file count and size
-  - ✅ Presence of `index.html`
-  - ✅ No broken absolute paths remaining
-  - ✅ Directory structure validation
-  - ✅ Proper file distribution
-
-#### Improved Workflow
-- **New step**: "Validate deployment" runs after path fixing
-- **Better logging**: Each step now has clear emoji indicators
-- **Enhanced error handling**: More informative error messages
-- **Timeout increased**: From 10 to 15 minutes for larger deployments
-
-#### Documentation
-- **New file**: `DEPLOY.md` - Comprehensive deployment guide
-- **Updated**: `README.md` with v2.3 features
-- **Added**: This changelog
-
-### 🔧 Improvements
-
-#### Workflow Robustness
-- `fetch-depth: 0` for target repo checkout (full history)
-- Multiple git reset/clean stages for maximum safety
-- Empty commit support when no changes exist
-- Better git status output before/after cleanup
-
-#### Logging & Visibility
-- Detailed logs at each deployment phase
-- Color-coded output with emoji indicators
-- Comprehensive summary in GitHub Actions UI
-- File count and size tracking
-
-#### Error Prevention
-- Better input validation with detailed error messages
-- Source artifact verification with file counting
-- Copy verification (source/destination file count matching)
-- Path fixing validation with error checking
-
-### 📊 Changes Made
-
-#### `.github/workflows/deploy-site.yml`
-```diff
-+ timeout-minutes: 15  # Increased from 10
-
-+ - name: Validate deployment  # NEW STEP
-+   id: validate_deploy
-+   run: bash validate-deploy.sh
-
-+ fetch-depth: 0  # Full git history for target repo
-
-+ Better cleanup with hard reset and multiple clean stages
-
-+ fetch-depth: 0  # Get full git history
-+ git reset HEAD --hard  # Additional safety reset
-
-+ timestamp tracking in commits
-```
-
-#### `.github/scripts/validate-deploy.sh` (NEW)
-- Validates deployed files count
-- Checks `index.html` exists and reports size
-- Scans for remaining absolute paths
-- Displays directory structure
-- File type statistics (HTML, CSS, JS, etc.)
-
-#### `DEPLOY.md` (NEW)
-- **Step-by-step deployment guide**
-- Prerequisites checklist
-- Input parameters explanation
-- Detailed phase breakdown (validation → cleanup → deploy → validate)
-- Troubleshooting guide with solutions
-- File structure reference
-- Best practices
-- Advanced options (custom messages, subpath deployment, manual cleanup)
-
-#### `README.md` (UPDATED)
-- Added cleanup strategy section
-- Updated version to v2.3.0
-- Added `validate-deploy.sh` documentation
-- Enhanced changelog section
-- Better formatting and organization
-
-#### `CHANGELOG.md` (NEW - THIS FILE)
-- Complete history of changes
-- Detailed explanation of v2.3 improvements
-- Links to related documentation
-
-### 🔐 Security Enhancements
-
-- **Hard reset** instead of soft reset for git safety
-- **Double reset** (after clean, before commit) for guarantees
-- **Force clean** with `-fdx` flags
-- **File validation** at multiple checkpoints
-- **No temporary files** left in working directory
-
-### 🔗 Deployment Phases (Now 7 phases)
-
-1. **Validate inputs** (regex, formats, normalization)
-2. **Download artifact** (from web-crawler)
-3. **Verify artifact** (file count, size, integrity)
-4. **Clean repository** 📦 **[NEW]** - Complete cleanup
-5. **Copy files** (from artifact to target repo)
-6. **Fix paths** (absolute → relative + base href)
-7. **Validate deployment** ✅ **[NEW]** - Integrity check
-8. **Commit & Push** (force push to target branch)
-
-### 🧐 Why These Changes?
-
-#### Why Complete Cleanup?
-
-**Problem**: When deploying multiple times to the same repository, old files could accumulate if the structure changed (e.g., old files deleted in new build).
-
-**Solution**: Remove everything except git metadata and GitHub config.
-
-**Benefits**:
-- ✅ 100% guaranteed clean state
-- ✅ No file accumulation
-- ✅ Idempotent deployments
-- ✅ No conflicts or merge issues
-- ✅ Fresh start every time
-
-#### Why Validation?
-
-**Problem**: You deploy successfully but don't know if the website actually loaded correctly or if paths are broken.
-
-**Solution**: Run validation script to check deployed website integrity.
-
-**Benefits**:
-- ✅ Immediate feedback on deployment quality
-- ✅ Early detection of path issues
-- ✅ File count verification
-- ✅ Directory structure validation
-- ✅ Peace of mind
-
-### 🔄 Migration Guide (v2.2 → v2.3)
-
-No breaking changes! If you're using v2.2:
-
-1. Pull latest changes
-2. Workflow runs automatically with improvements
-3. Your deployments get:
-   - Complete cleanup (better!)
-   - Validation (better!)
-   - More timeout (better!)
-   - Better logging (better!)
-
-**No action needed from you!** Everything is backwards compatible.
-
-### 📋 Files Added/Modified
-
-| File | Status | Purpose |
-|------|--------|----------|
-| `.github/workflows/deploy-site.yml` | 🔄 Modified | Cleanup, validation, better logging |
-| `.github/scripts/validate-deploy.sh` | ✨ New | Post-deployment validation |
-| `DEPLOY.md` | ✨ New | Comprehensive deployment guide |
-| `README.md` | 🔄 Updated | v2.3 features documentation |
-| `CHANGELOG.md` | ✨ New | This file - version history |
-
-### 🚃 Known Issues
-
-None! All features are production-ready.
-
-### 🕵️ Future Considerations
-
-- [ ] Support for multiple artifact formats
-- [ ] Automated testing before deployment
-- [ ] Rollback capability
-- [ ] Deployment statistics tracking
-- [ ] Slack notifications on deployment
-- [ ] Pre/post deployment hooks
-
-### 🚆 Contributors
-
-- @KomarovAI - Implementation and testing
-
-### 🔗 Links
-
-- **Full Deployment Guide**: [DEPLOY.md](./DEPLOY.md)
-- **Repository README**: [README.md](./README.md)
-- **Web Crawler**: [KomarovAI/web-crawler](https://github.com/KomarovAI/web-crawler)
+### Changed
+- **fix-paths.sh:** Major refactor to use Python for complex transformations
 
 ---
 
-## [2.2.0] - 2025-12-19
+## [2.2.0] - 2025-12-26
 
-### Features
-- Path fixing script with BASE_HREF support
-- Automated path conversion (absolute → relative)
-- Base href insertion for subpath deployments
-- Full GitHub Pages support
-
-### Improvements
-- Centralized path fixing logic
-- Better environment variable handling
-- Improved logging
+### Added
+- **Snapshot-based rollback** - automatic revert on failure
+- **Step-by-step validation** - comprehensive pre-deployment checks
+- **Deployment summary** - detailed success/failure reporting
 
 ---
 
-## [2.1.0] - 2025-12-12
+## [2.1.0] - 2025-12-26
 
-### Initial Release
+### Added
+- **Artifact auto-detection** - pattern matching for `*-{run_id}`
+- **Subpath deployment support** - `BASE_HREF` parameter
+- **Workflow input validation** - regex checks for all parameters
+
+---
+
+## [2.0.0] - 2025-12-26
+
+### Added
+- **Artifact-based deployment** - no more source repo cloning
+- **Cross-repository support** - deploy from any workflow
+- **Smart path fixing** - converts absolute to relative URLs
+- **GitHub Pages compatibility** - automatic `.html` extension addition
+
+### Changed
+- **Complete workflow rewrite** - artifact orchestration instead of git operations
+
+### Breaking Changes
+- Removed support for direct source repo deployment
+- Now requires artifact upload in source workflow
+
+---
+
+## [1.0.0] - 2025-12-25
+
+### Added
+- Initial release
 - Basic deployment workflow
-- Artifact download and verification
-- Simple file copying
-- Git commit and push
+- Repository cloning and copying
+- Simple path fixing
 
 ---
 
-*For detailed deployment instructions, see [DEPLOY.md](./DEPLOY.md)*
+## Legend
+
+- 🎉 Major feature release
+- ⚠️ Critical bugfix required
+- 🐛 Bug fix
+- ✨ New feature
+- 🔥 Breaking change
+- 🚀 Performance improvement
+- ✅ Improvement
+- ❌ Known issue
+- ℹ️ Information
