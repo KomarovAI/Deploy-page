@@ -268,7 +268,18 @@ jobs:
           python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py"
           echo "✅ Static site issues fixed"
 
-      # Step 14: Validate deployment
+      # Step 14: Validate links for 404s
+      - name: Validate links
+        working-directory: target-repo
+        run: |
+          echo "🔗 Validating links..."
+          python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-links.py" . || true
+          if [ -f broken-links.json ]; then
+            echo "⚠️ Broken links report saved"
+          fi
+          echo "✅ Link validation complete"
+
+      # Step 15: Validate deployment
       - name: Validate deployment
         working-directory: target-repo
         env:
@@ -284,7 +295,7 @@ jobs:
           python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py" || true
           echo "✅ Validation complete"
 
-      # Step 15: Commit and push
+      # Step 16: Commit and push
       - name: Commit and push
         id: commit
         working-directory: target-repo
@@ -312,7 +323,7 @@ jobs:
           
           echo "✅ Deployed: ${SHORT_SHA} (${CHANGED_FILES} files changed)"
 
-      # Step 16: PAUSE FOR GITHUB PAGES BUILD
+      # Step 17: PAUSE FOR GITHUB PAGES BUILD
       - name: Wait for GitHub Pages build
         id: pages_url
         run: |
@@ -339,7 +350,7 @@ jobs:
           echo "Check build status:"
           echo "https://github.com/${TARGET_REPO}/deployments/activity_log"
 
-      # Step 17: Deployment summary
+      # Step 18: Deployment summary
       - name: Deployment summary
         if: always()
         run: |
@@ -365,6 +376,7 @@ jobs:
             echo "- ✅ Downloaded artifact (${{ steps.verify.outputs.file_count }} files)" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Cleaned & copied to repository" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Applied static site fixes" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Validated links for 404s" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Committed & pushed to GitHub" >> $GITHUB_STEP_SUMMARY
             echo "- ⏳ GitHub Pages build in progress (2-3 minutes)" >> $GITHUB_STEP_SUMMARY
             echo "- 🌐 Live at: [${{ steps.pages_url.outputs.url }}](${{ steps.pages_url.outputs.url }})" >> $GITHUB_STEP_SUMMARY
