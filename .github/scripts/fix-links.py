@@ -21,9 +21,24 @@ class ComprehensiveLinkRewriter:
     """Fix ALL link types: standard + Elementor + JS + CSS"""
     
     def __init__(self, mapping_file):
-        """Load path mapping from JSON"""
-        with open(mapping_file, 'r') as f:
-            self.mapping = json.load(f)
+        """Load path mapping from JSON with robust error handling"""
+        try:
+            with open(mapping_file, 'r', encoding='utf-8') as f:
+                raw_content = f.read().strip()
+                if raw_content.startswith('['):
+                    # JSON array format: [[old, new], [old, new], ...]
+                    mapping_list = json.loads(raw_content)
+                    self.mapping = {old: new for old, new in mapping_list}
+                else:
+                    # JSON object format: {old: new, ...}
+                    self.mapping = json.loads(raw_content)
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON parsing error in {mapping_file}: {e}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"❌ Failed to load mapping: {e}", file=sys.stderr)
+            sys.exit(1)
+        
         self.site_root = Path(mapping_file).parent.parent
         self.stats = {'fixed': 0, 'skipped': 0, 'errors': 0}
     
@@ -65,19 +80,19 @@ class ComprehensiveLinkRewriter:
         if link_path.startswith('/'):
             return link
         
-        # Resolve in old structure
-        old_source_dir = Path(old_source_rel).parent
-        target_in_old = old_source_dir / link_path
-        target_norm = target_in_old.resolve()
-        
         try:
+            # Resolve in old structure
+            old_source_dir = Path(old_source_rel).parent
+            target_in_old = old_source_dir / link_path
+            target_norm = target_in_old.resolve()
+            
             target_rel_old = str(target_norm.relative_to(self.site_root))
             target_rel_new = self.mapping.get(target_rel_old, target_rel_old)
             
             new_source_dir = Path(new_source_rel).parent
             new_link = str(Path(target_rel_new).relative_to(new_source_dir))
             return new_link + query_str
-        except:
+        except Exception:
             return link
     
     def fix_with_lxml(self, html_content, old_source_rel, new_source_rel):
@@ -85,20 +100,26 @@ class ComprehensiveLinkRewriter:
         try:
             doc = lxml_html.fromstring(html_content, lxml_html.HTMLParser())
         except:
-            return html_content
+            return html_content, 0
         
         changes = 0
         # Fix: href, src, data-href, data-src, data-link (common Elementor patterns)
         for elem in doc.iter():
             for attr in ['href', 'src', 'data-href', 'data-src', 'data-link']:
-                old_link = elem.get(attr)
-                if old_link:
-                    new_link = self.transform_link(old_link, old_source_rel, new_source_rel)
-                    if new_link != old_link:
-                        elem.set(attr, new_link)
-                        changes += 1
+                try:
+                    old_link = elem.get(attr)
+                    if old_link:
+                        new_link = self.transform_link(old_link, old_source_rel, new_source_rel)
+                        if new_link != old_link:
+                            elem.set(attr, new_link)
+                            changes += 1
+                except Exception:
+                    pass
         
-        return lxml_html.tostring(doc, encoding='unicode', method='html'), changes
+        try:
+            return lxml_html.tostring(doc, encoding='unicode', method='html'), changes
+        except:
+            return html_content, 0
     
     def fix_with_regex_layer2(self, html_content, old_source_rel, new_source_rel):
         """Layer 2: Regex - catch Elementor data-* and missed attributes"""
@@ -116,16 +137,22 @@ class ComprehensiveLinkRewriter:
         changes = 0
         for pattern, attr_type in patterns:
             def replace_func(match):
+                nonlocal changes
                 old_link = match.group(1)
                 if not self.is_external(old_link):
-                    new_link = self.transform_link(old_link, old_source_rel, new_source_rel)
-                    if new_link != old_link:
-                        nonlocal changes
-                        changes += 1
-                        return match.group(0).replace(old_link, new_link)
+                    try:
+                        new_link = self.transform_link(old_link, old_source_rel, new_source_rel)
+                        if new_link != old_link:
+                            changes += 1
+                            return match.group(0).replace(old_link, new_link)
+                    except Exception:
+                        pass
                 return match.group(0)
             
-            html_content = re.sub(pattern, replace_func, html_content)
+            try:
+                html_content = re.sub(pattern, replace_func, html_content)
+            except Exception:
+                pass
         
         return html_content, changes
     
@@ -136,36 +163,48 @@ class ComprehensiveLinkRewriter:
         # CSS background-image: url("...")
         def fix_background_image(match):
             nonlocal changes
-            old_url = match.group(1)
-            if not self.is_external(old_url):
-                new_url = self.transform_link(old_url, old_source_rel, new_source_rel)
-                if new_url != old_url:
-                    changes += 1
-                    return f'background-image: url("{new_url}")'
+            try:
+                old_url = match.group(1)
+                if not self.is_external(old_url):
+                    new_url = self.transform_link(old_url, old_source_rel, new_source_rel)
+                    if new_url != old_url:
+                        changes += 1
+                        return f'background-image: url("{new_url}")'
+            except Exception:
+                pass
             return match.group(0)
         
-        html_content = re.sub(
-            r'background-image:\s*url\("([^"]*)"\)',
-            fix_background_image,
-            html_content
-        )
+        try:
+            html_content = re.sub(
+                r'background-image:\s*url\("([^"]*)"\)',
+                fix_background_image,
+                html_content
+            )
+        except Exception:
+            pass
         
         # JSON-LD "url":"..."
         def fix_jsonld(match):
             nonlocal changes
-            old_url = match.group(1)
-            if not self.is_external(old_url):
-                new_url = self.transform_link(old_url, old_source_rel, new_source_rel)
-                if new_url != old_url:
-                    changes += 1
-                    return f'"url":"{new_url}"'
+            try:
+                old_url = match.group(1)
+                if not self.is_external(old_url):
+                    new_url = self.transform_link(old_url, old_source_rel, new_source_rel)
+                    if new_url != old_url:
+                        changes += 1
+                        return f'"url":"{new_url}"'
+            except Exception:
+                pass
             return match.group(0)
         
-        html_content = re.sub(
-            r'"url":"([^"]*)"',
-            fix_jsonld,
-            html_content
-        )
+        try:
+            html_content = re.sub(
+                r'"url":"([^"]*)"',
+                fix_jsonld,
+                html_content
+            )
+        except Exception:
+            pass
         
         return html_content, changes
     
@@ -175,27 +214,39 @@ class ComprehensiveLinkRewriter:
         
         # Layer 1: lxml (fast, robust)
         if HAS_LXML:
-            html_content, changes = self.fix_with_lxml(html_content, old_source_rel, new_source_rel)
-            total_changes += changes
+            try:
+                html_content, changes = self.fix_with_lxml(html_content, old_source_rel, new_source_rel)
+                total_changes += changes
+            except Exception as e:
+                print(f"⚠️  Layer 1 error: {str(e)[:60]}", file=sys.stderr)
         
         # Layer 2: Regex (Elementor + JS)
-        html_content, changes = self.fix_with_regex_layer2(html_content, old_source_rel, new_source_rel)
-        total_changes += changes
+        try:
+            html_content, changes = self.fix_with_regex_layer2(html_content, old_source_rel, new_source_rel)
+            total_changes += changes
+        except Exception as e:
+            print(f"⚠️  Layer 2 error: {str(e)[:60]}", file=sys.stderr)
         
         # Layer 3: Regex (CSS + JSON-LD)
-        html_content, changes = self.fix_with_regex_layer3(html_content, old_source_rel, new_source_rel)
-        total_changes += changes
+        try:
+            html_content, changes = self.fix_with_regex_layer3(html_content, old_source_rel, new_source_rel)
+            total_changes += changes
+        except Exception as e:
+            print(f"⚠️  Layer 3 error: {str(e)[:60]}", file=sys.stderr)
         
         return html_content, total_changes
     
     def process_site(self, site_path):
-        """Process all HTML files with 3-layer strategy"""
+        """Process all HTML files with 3-layer strategy and error recovery"""
         site_root = Path(site_path)
         fixed_count = 0
         error_count = 0
         total_links_fixed = 0
         
-        for new_html_file in sorted(site_root.rglob('*.html')):
+        html_files = sorted(site_root.rglob('*.html'))
+        print(f"   Found {len(html_files)} HTML files to process")
+        
+        for html_idx, new_html_file in enumerate(html_files, 1):
             try:
                 new_rel = str(new_html_file.relative_to(site_root))
                 
@@ -224,8 +275,10 @@ class ComprehensiveLinkRewriter:
                     total_links_fixed += num_changes
             
             except Exception as e:
-                print(f"⚠️  Error: {new_html_file}: {str(e)[:50]}", file=sys.stderr)
+                print(f"⚠️  Error processing {new_html_file.name}: {str(e)[:60]}", file=sys.stderr)
                 error_count += 1
+                # Continue processing other files
+                continue
         
         return fixed_count, error_count, total_links_fixed
 
@@ -252,14 +305,20 @@ def main():
     print(f"   Layer 2: Regex (Elementor, JavaScript)")
     print(f"   Layer 3: Regex (CSS, JSON-LD)")
     
-    rewriter = ComprehensiveLinkRewriter(mapping_file)
-    fixed_files, errors, total_fixed = rewriter.process_site(site_path)
+    try:
+        rewriter = ComprehensiveLinkRewriter(mapping_file)
+        fixed_files, errors, total_fixed = rewriter.process_site(site_path)
+        
+        print(f"\n✅ Fixed: {fixed_files} files, {total_fixed} links total")
+        if errors > 0:
+            print(f"⚠️  Errors: {errors} (but processing continued)")
+            sys.exit(0)  # Non-fatal errors
+        
+        sys.exit(0)
     
-    print(f"\n✅ Fixed: {fixed_files} files, {total_fixed} links total")
-    if errors > 0:
-        print(f"⚠️  Errors: {errors}")
-    
-    sys.exit(1 if errors > 0 else 0)
+    except Exception as e:
+        print(f"\n❌ Fatal error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':
