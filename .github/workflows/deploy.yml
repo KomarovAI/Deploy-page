@@ -253,7 +253,31 @@ jobs:
           python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.py"
           echo "✅ Paths fixed"
 
-      # Step 13: Fix static site issues
+      # Step 13: Calculate path mapping (NEW - lxml strategy)
+      - name: Calculate path mapping
+        working-directory: target-repo
+        id: mapping
+        run: |
+          echo "📍 Calculating path mappings for link rewriting..."
+          python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/normalize-paths.py" . 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          if [ -f path-mapping.json ]; then
+            MAPPING_SIZE=$(wc -l < path-mapping.json)
+            echo "mapping_lines=${MAPPING_SIZE}" >> $GITHUB_OUTPUT
+            echo "✅ Path mapping created"
+          else
+            echo "⚠️ Path mapping not created"
+          fi
+
+      # Step 14: Fix links using lxml (NEW - lxml strategy)
+      - name: Fix links with lxml
+        working-directory: target-repo
+        id: fix_links
+        run: |
+          echo "🔗 Rewriting all href/src attributes using lxml..."
+          python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-links.py" . path-mapping.json 2>&1 | tee -a $GITHUB_STEP_SUMMARY
+          echo "✅ All links rewritten"
+
+      # Step 15: Fix static site issues
       - name: Fix static site issues
         working-directory: target-repo
         run: |
@@ -268,18 +292,25 @@ jobs:
           python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py"
           echo "✅ Static site issues fixed"
 
-      # Step 14: Validate links for 404s
+      # Step 16: Validate links for 404s
       - name: Validate links
         working-directory: target-repo
+        id: validate
         run: |
-          echo "🔗 Validating links..."
-          python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-links.py" . || true
+          echo "🔍 Validating links for broken 404s..."
+          python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-links.py" . || VALIDATION_FAILED=$?
+          
           if [ -f broken-links.json ]; then
-            echo "⚠️ Broken links report saved"
+            BROKEN_COUNT=$(grep -o '"source"' broken-links.json | wc -l)
+            echo "broken_links=${BROKEN_COUNT}" >> $GITHUB_OUTPUT
+            echo "⚠️ Found ${BROKEN_COUNT} broken links (see report)"
+            cat broken-links.json >> $GITHUB_STEP_SUMMARY
+          else
+            echo "broken_links=0" >> $GITHUB_OUTPUT
+            echo "✅ All links validated successfully!"
           fi
-          echo "✅ Link validation complete"
 
-      # Step 15: Validate deployment
+      # Step 17: Validate deployment
       - name: Validate deployment
         working-directory: target-repo
         env:
@@ -295,7 +326,7 @@ jobs:
           python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py" || true
           echo "✅ Validation complete"
 
-      # Step 16: Commit and push
+      # Step 18: Commit and push
       - name: Commit and push
         id: commit
         working-directory: target-repo
@@ -323,7 +354,7 @@ jobs:
           
           echo "✅ Deployed: ${SHORT_SHA} (${CHANGED_FILES} files changed)"
 
-      # Step 17: PAUSE FOR GITHUB PAGES BUILD
+      # Step 19: PAUSE FOR GITHUB PAGES BUILD
       - name: Wait for GitHub Pages build
         id: pages_url
         run: |
@@ -350,7 +381,7 @@ jobs:
           echo "Check build status:"
           echo "https://github.com/${TARGET_REPO}/deployments/activity_log"
 
-      # Step 18: Deployment summary
+      # Step 20: Deployment summary
       - name: Deployment summary
         if: always()
         run: |
@@ -370,11 +401,15 @@ jobs:
             echo "| Files Deployed | ${{ steps.copy.outputs.deployedfiles }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Size | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Base href | \`${{ steps.inputs.outputs.base_href }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Broken Links | ${{ steps.validate.outputs.broken_links }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Pages URL | [${{ steps.pages_url.outputs.url }}](${{ steps.pages_url.outputs.url }}) |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "### Timeline" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Downloaded artifact (${{ steps.verify.outputs.file_count }} files)" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Cleaned & copied to repository" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Fixed paths for GitHub Pages" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Calculated path mappings" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Rewrote all links with lxml" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Applied static site fixes" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Validated links for 404s" >> $GITHUB_STEP_SUMMARY
             echo "- ✅ Committed & pushed to GitHub" >> $GITHUB_STEP_SUMMARY
