@@ -92,10 +92,12 @@ class StaticSiteFixer:
         self.resources_fixed = 0
         self.css_fixed = 0
         self.data_attrs_fixed = 0
+        self.base_tags_added = 0
         self.shortcodes_detected = []
         self.restructure_map: Dict[str, str] = {}
         self.broken_links = []
         self.sitemap_urls = []
+        self.relative_path_issues = []
     
     def detect_directory_structure(self, filename: str) -> Optional[Tuple[str, str]]:
         """Detect directory structure from flattened filename.
@@ -126,6 +128,74 @@ class StaticSiteFixer:
         
         return None
     
+    def inject_base_tag(self, soup: BeautifulSoup, base_href: str = "/") -> bool:
+        """⭐ NEW: Inject <base href> tag to fix nested link issues.
+        
+        PROBLEM: When links use relative paths like './about.html',
+        they work from root but BREAK on nested pages:
+        - /index.html → ./about.html ✅ finds /about.html
+        - /services/design/index.html → ./about.html ❌ looks for /services/design/about.html
+        
+        SOLUTION: Add <base href="/"> in <head> to make ALL relative paths
+        resolve from root, not current directory.
+        
+        Example output:
+        <head>
+            <meta charset="UTF-8">
+            <base href="/">  ← THIS FIXES EVERYTHING
+            <title>Page</title>
+        </head>
+        """
+        head = soup.find('head')
+        if not head:
+            return False
+        
+        # Check if base tag already exists
+        existing_base = head.find('base')
+        if existing_base:
+            return False  # Already has base tag
+        
+        # Create and insert base tag (after charset, before other meta tags)
+        base_tag = soup.new_tag('base', href=base_href)
+        
+        # Find insertion point: after charset meta, before other tags
+        charset = head.find('meta', charset=True)
+        if charset:
+            charset.insert_after(base_tag)
+        else:
+            # No charset, insert at beginning
+            head.insert(0, base_tag)
+        
+        self.base_tags_added += 1
+        return True
+    
+    def detect_relative_path_issues(self, soup: BeautifulSoup, file_depth: int) -> List[str]:
+        """⭐ NEW: Detect links that will break on nested pages.
+        
+        Pattern: ./page.html (relative to current directory)
+        Issue: Works on /index.html but breaks on /dir/subdir/index.html
+        
+        Returns: List of problematic links found
+        """
+        issues = []
+        
+        # Only check if file is nested (depth > 0)
+        if file_depth == 0:
+            return issues
+        
+        for link_tag in soup.find_all('a', href=True):
+            href = link_tag['href']
+            
+            # Check for relative directory links: ./page.html or ../page.html pattern
+            if href.startswith('./') and not href.startswith('./'):
+                # This ./page.html will BREAK on nested pages
+                issues.append(href)
+            elif not href.startswith(('/', 'http://', 'https://', '#', 'mailto:', 'tel:', '..')):  
+                # Bare relative: page.html will BREAK on nested pages
+                issues.append(href)
+        
+        return issues
+    
     def validate_links(self, cwd: Path) -> int:
         """Validate all links exist (integrated, token-optimized)"""
         checked, broken = set(), []
@@ -147,23 +217,23 @@ class StaticSiteFixer:
                         link_path = urlparse(link).path.split('?')[0]
                         
                         # Resolve path
-                        if link_path.startswith('/'):\
-                            target = cwd / link_path.lstrip('/')\
-                        else:\
+                        if link_path.startswith('/'):
+                            target = cwd / link_path.lstrip('/')
+                        else:
                             target = (html_file.parent / link_path).resolve()
                         
                         target_key = str(target)
-                        if target_key in checked:\
+                        if target_key in checked:
                             continue
                         checked.add(target_key)
                         
                         if not target.exists():
-                            broken.append({\
-                                'source': str(html_file.relative_to(cwd)),\
-                                'link': link,\
-                                'target': str(target.relative_to(cwd)) if target.is_relative_to(cwd) else str(target)\
+                            broken.append({
+                                'source': str(html_file.relative_to(cwd)),
+                                'link': link,
+                                'target': str(target.relative_to(cwd)) if target.is_relative_to(cwd) else str(target)
                             })
-            \
+            
             except Exception:
                 pass
         
@@ -180,15 +250,15 @@ class StaticSiteFixer:
             
             rel = html_file.relative_to(cwd)
             
-            if rel.name == "index.html":\
-                url = f"/{'/'.join(rel.parts[:-1])}/"\
-            else:\
-                url = f"/{rel.parent / rel.stem}/"\
+            if rel.name == "index.html":
+                url = f"/{'/'.join(rel.parts[:-1])}/"
+            else:
+                url = f"/{rel.parent / rel.stem}/"
             
             urls.append(url.replace('\\', '/'))
         
         sitemap = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-        for url in urls:\
+        for url in urls:
             sitemap += f'  <url><loc>{domain}{url}</loc></url>\n'
         sitemap += '</urlset>'
         
@@ -538,7 +608,7 @@ class StaticSiteFixer:
         body.append(script_tag)
         return True
     
-    def process_html_file(self, file_path: Path, cwd: Path) -> Tuple[bool, int, int]:
+    def process_html_file(self, file_path: Path, cwd: Path, base_href: str = "/") -> Tuple[bool, int, int]:
         """Process a single HTML file."""
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
@@ -550,6 +620,15 @@ class StaticSiteFixer:
             
             rel_path = file_path.relative_to(cwd)
             depth = len(rel_path.parts) - 1
+            
+            # ⭐ NEW: Inject base tag to fix nested link issues
+            if self.inject_base_tag(soup, base_href):
+                modified = True
+            
+            # ⭐ NEW: Detect potential relative path issues
+            issues = self.detect_relative_path_issues(soup, depth)
+            if issues:
+                self.relative_path_issues.extend(issues)
             
             # Fix resource paths
             resources_fixed = self.fix_resource_paths(soup, depth)
@@ -612,7 +691,7 @@ class StaticSiteFixer:
         except Exception:
             return False, 0, 0
     
-    def run(self) -> int:
+    def run(self, base_href: str = "/") -> int:
         """Execute static site fixing."""
         cwd = Path.cwd()
         
@@ -640,11 +719,23 @@ class StaticSiteFixer:
             return 0
         
         for html_file in html_files:
-            modified, removed, resources = self.process_html_file(html_file, cwd)
+            modified, removed, resources = self.process_html_file(html_file, cwd, base_href)
             if modified:
                 self.files_processed += 1
         
         # Summary
+        if self.base_tags_added > 0:
+            print(f"\n⭐ Added <base href=\"{base_href}\"> tags: {self.base_tags_added} files")
+            print("   → Fixes nested page link issues\n")
+        
+        if self.relative_path_issues:
+            print(f"⚠️  Found {len(self.relative_path_issues)} potential relative path issues:")
+            for issue in self.relative_path_issues[:10]:
+                print(f"   - {issue}")
+            if len(self.relative_path_issues) > 10:
+                print(f"   ... and {len(self.relative_path_issues) - 10} more")
+            print("   → <base> tag should handle these\n")
+        
         if self.resources_fixed > 0:
             print(f"✅ Fixed {self.resources_fixed} resource paths\n")
         
@@ -688,7 +779,8 @@ class StaticSiteFixer:
 if __name__ == "__main__":
     try:
         fixer = StaticSiteFixer()
-        sys.exit(fixer.run())
+        base_href = "/"  # Can be changed to /project/ if needed
+        sys.exit(fixer.run(base_href))
     except KeyboardInterrupt:
         print("⚠️ Interrupted by user")
         sys.exit(1)
