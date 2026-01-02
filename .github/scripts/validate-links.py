@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Validate all links in static HTML site - detects 404s before deployment
-Filters out WordPress CMS artifacts that don't belong in static exports
+Filters out WordPress CMS artifacts and external URLs
 """
 import os
 import sys
@@ -21,24 +21,47 @@ class LinkExtractor(HTMLParser):
                 if attr in ['href', 'src'] and value:
                     self.links.append(value)
 
-def is_wp_artifact(link):
-    """Check if link is WordPress CMS artifact that shouldn't exist in static export"""
-    # Skip protocol-based URLs and data URIs
-    if link.startswith(('http://', 'https://', '#', 'mailto:', 'tel:', 'javascript:', 'data:')):
-        return True
+def should_validate(link):
+    """
+    Determine if link should be validated as local file.
+    Returns False for external URLs, data URIs, anchors, etc.
+    """
+    if not link:
+        return False
     
-    # Skip OEmbed and REST API
-    if 'wp-json' in link or 'oembed' in link.lower():
-        return True
+    # Skip external protocols
+    if link.startswith(('http://', 'https://', 'ftp://', 'ftps://')):
+        return False
     
-    link_path = urlparse(link).path.split('?')[0]
-    wp_patterns = (
-        'wp-json/',          # REST API endpoints
-        'wp-content/plugins/',  # Plugin files
-        'wp-content/cache/',    # Cache files
-        'wp-includes/',         # WordPress core
-    )
-    return any(pattern in link_path for pattern in wp_patterns) or link_path.endswith('.php')
+    # Skip protocol-relative URLs (//example.com)
+    if link.startswith('//'):
+        return False
+    
+    # Skip data URIs (base64 images, embedded SVGs)
+    if link.startswith('data:'):
+        return False
+    
+    # Skip action anchors, email, phone, javascript
+    if link.startswith(('#', 'mailto:', 'tel:', 'sms:', 'javascript:', 'about:')):
+        return False
+    
+    # Skip WordPress CMS artifacts
+    if any(pattern in link for pattern in ['wp-json', 'wp-admin', 'wp-content/plugins', 'wp-content/cache']):
+        return False
+    
+    # Skip OEmbed endpoints
+    if 'oembed' in link.lower():
+        return False
+    
+    # Skip .php files (server-side only)
+    if link.endswith('.php'):
+        return False
+    
+    # Skip empty fragments
+    if link == '#':
+        return False
+    
+    return True
 
 def validate_site(site_path):
     """Scan all HTML files and check link targets exist"""
@@ -53,20 +76,29 @@ def validate_site(site_path):
                 parser.feed(f.read())
                 
                 for link in parser.links:
-                    # Skip WordPress artifacts and protocols
-                    if is_wp_artifact(link):
+                    # Skip external/special URLs
+                    if not should_validate(link):
                         continue
                     
-                    # Normalize path
-                    link_path = urlparse(link).path.split('?')[0]
+                    # Parse the path, strip query string and fragment
+                    link_path = urlparse(link).path
+                    if not link_path:
+                        continue
                     
                     # Resolve relative to HTML file location
                     if link_path.startswith('/'):
-                        target = site_path / link_path.lstrip('/')
-                    else:
+                        # Absolute path from site root
+                        target = site_path / link_path.lstrip('/')\n                    else:
+                        # Relative path from current file
                         target = (html_file.parent / link_path).resolve()
                     
-                    # Check if exists (cache checks)
+                    # Normalize to avoid symlink issues
+                    try:
+                        target = target.resolve()
+                    except Exception:
+                        continue
+                    
+                    # Check if exists (cache to avoid duplicate checks)
                     target_key = str(target)
                     if target_key in checked:
                         continue
