@@ -1,81 +1,200 @@
-name: Reset Repository to Commit
+name: 🔄 Reset Repository to Commit
 
 on:
   workflow_dispatch:
     inputs:
-      target_commit:
-        description: 'Target commit hash to reset to'
+      target_repo:
+        description: '📦 Target repository (owner/repo format)'
         required: true
         type: string
+        default: 'KomarovAI/archived-sites'
+      target_commit:
+        description: '🎯 Target commit hash to reset to'
+        required: true
+        type: string
+      target_branch:
+        description: '🌿 Target branch to reset'
+        required: false
+        type: string
+        default: 'main'
       force_push:
-        description: 'Use force push (overwrite remote history)'
+        description: '⚠️ Use force push (overwrite remote history)'
         required: false
         type: boolean
-        default: false
+        default: true
+
+permissions:
+  contents: write
 
 jobs:
   reset:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    name: 🔄 Reset ${{ github.event.inputs.target_repo }}
     
     steps:
-      - name: Checkout repository
+      - name: 📋 Validate inputs
+        run: |
+          REPO="${{ github.event.inputs.target_repo }}"
+          COMMIT="${{ github.event.inputs.target_commit }}"
+          BRANCH="${{ github.event.inputs.target_branch }}"
+          
+          # Validate repo format
+          if [[ ! "$REPO" =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
+            echo "❌ Invalid repository format: $REPO"
+            echo "✅ Correct format: owner/repo (e.g., KomarovAI/archived-sites)"
+            exit 1
+          fi
+          
+          # Validate commit hash format
+          if [[ ! "$COMMIT" =~ ^[a-f0-9]{7,40}$ ]]; then
+            echo "❌ Invalid commit hash: $COMMIT"
+            echo "✅ Commit must be 7-40 hex characters"
+            exit 1
+          fi
+          
+          # Validate branch name
+          if [[ ! "$BRANCH" =~ ^[a-zA-Z0-9_/-]+$ ]]; then
+            echo "❌ Invalid branch name: $BRANCH"
+            exit 1
+          fi
+          
+          echo "✅ Input validation passed"
+          echo "  Repository: $REPO"
+          echo "  Commit: $COMMIT"
+          echo "  Branch: $BRANCH"
+
+      - name: 📥 Checkout target repository
         uses: actions/checkout@v4
         with:
+          repository: ${{ github.event.inputs.target_repo }}
+          ref: ${{ github.event.inputs.target_branch }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Git
+      - name: ⚙️ Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "Git configured:"
+          git config --list | grep -E "(user|url)" | head -5
 
-      - name: Validate commit exists
+      - name: 🔍 Validate target commit exists
         run: |
-          if ! git cat-file -t "${{ github.event.inputs.target_commit }}" > /dev/null 2>&1; then
-            echo "❌ Commit ${{ github.event.inputs.target_commit }} not found!"
+          COMMIT="${{ github.event.inputs.target_commit }}"
+          REPO="${{ github.event.inputs.target_repo }}"
+          
+          if ! git cat-file -t "$COMMIT" > /dev/null 2>&1; then
+            echo "❌ Commit $COMMIT not found in $REPO!"
+            echo ""
+            echo "📋 Recent commits in repository:"
+            git log --oneline -10
             exit 1
           fi
-          echo "✅ Commit found: $(git log -1 --format=%H ${{ github.event.inputs.target_commit }})"
-          echo "📝 Commit message: $(git log -1 --format=%s ${{ github.event.inputs.target_commit }})"
+          
+          echo "✅ Commit found!"
+          echo ""
+          git log -1 --format="📋 Commit Details:%n  Hash: %H%n  Author: %an%n  Date: %ai%n  Message: %s" "$COMMIT"
 
-      - name: Reset to target commit
+      - name: 🔄 Reset to target commit
         run: |
-          echo "🔄 Resetting to commit: ${{ github.event.inputs.target_commit }}"
-          git reset --hard ${{ github.event.inputs.target_commit }}
-          echo "✅ Local reset complete"
-          echo "📊 Current HEAD:"
+          COMMIT="${{ github.event.inputs.target_commit }}"
+          BRANCH="${{ github.event.inputs.target_branch }}"
+          
+          echo "🔄 Resetting $BRANCH to $COMMIT"
+          git reset --hard "$COMMIT"
+          
+          echo ""
+          echo "✅ Reset complete!"
+          echo "📍 Current HEAD:"
           git log -1 --oneline
 
-      - name: Push changes
+      - name: 📊 Show commit details
         run: |
+          echo "📊 Reset Statistics:"
+          git log -1 --format="
+          ========================
+          Commit Hash: %H
+          Short Hash: %h
+          Author: %an <%ae>
+          Date: %ai
+          Message: %s
+          ========================"
+
+      - name: 🚀 Push changes to remote
+        run: |
+          BRANCH="${{ github.event.inputs.target_branch }}"
+          REPO="${{ github.event.inputs.target_repo }}"
+          
+          echo "🚀 Pushing to origin/$BRANCH"
+          
           if [ "${{ github.event.inputs.force_push }}" = "true" ]; then
-            echo "⚠️ Using force push (--force-with-lease)"
-            git push --force-with-lease origin ${{ github.ref_name }}
+            echo "⚠️  Using force push (--force-with-lease)"
+            echo "   This will overwrite remote history!"
+            git push --force-with-lease origin "$BRANCH"
+            echo "✅ Force push complete!"
           else
             echo "📤 Using safe push"
-            git push origin ${{ github.ref_name }}
+            if git push origin "$BRANCH" 2>&1 | grep -q "non-fast-forward"; then
+              echo "⚠️  Push rejected: repository has diverged"
+              echo "   Use force_push: true to overwrite remote"
+              exit 1
+            fi
+            echo "✅ Safe push complete!"
           fi
 
-      - name: Workflow Summary
+      - name: 📋 Create detailed summary
         if: success()
         run: |
-          echo "## ✅ Reset Successful" >> $GITHUB_STEP_SUMMARY
+          REPO="${{ github.event.inputs.target_repo }}"
+          COMMIT="${{ github.event.inputs.target_commit }}"
+          BRANCH="${{ github.event.inputs.target_branch }}"
+          FORCE="${{ github.event.inputs.force_push }}"
+          
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## ✅ Repository Reset Successful
+          
+          | Parameter | Value |
+          |-----------|-------|
+          | **Repository** | `${{ inputs.target_repo }}` |
+          | **Target Commit** | `${{ inputs.target_commit }}` |
+          | **Branch** | `${{ inputs.target_branch }}` |
+          | **Force Push** | ${{ inputs.force_push }} |
+          | **Timestamp** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |
+          
+          ### 📍 Current State
+          EOF
+          
+          git log -1 --format="
+          - **Commit Hash:** \`%H\`
+          - **Short Hash:** \`%h\`
+          - **Author:** %an
+          - **Date:** %ai
+          - **Message:** %s
+          " >> $GITHUB_STEP_SUMMARY
+          
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Repository Reset Completed**" >> $GITHUB_STEP_SUMMARY
+          echo "### 📚 Last 5 Commits" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Target Commit:** \`${{ github.event.inputs.target_commit }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Timestamp:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Current State" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          git log -1 --format="Commit: %H%nAuthor: %an%nDate: %ai%nMessage: %s" >> $GITHUB_STEP_SUMMARY
-          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          git log --oneline -5 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - name: Workflow Error
+      - name: ❌ Report failure
         if: failure()
         run: |
-          echo "## ❌ Reset Failed" >> $GITHUB_STEP_SUMMARY
-          echo "Please check the commit hash and try again." >> $GITHUB_STEP_SUMMARY
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## ❌ Reset Failed
+          
+          **Please check:**
+          - ✓ Repository format: `owner/repo` (e.g., `KomarovAI/archived-sites`)
+          - ✓ Commit hash is valid (7-40 hex characters)
+          - ✓ Commit exists in the repository
+          - ✓ Branch name is correct
+          - ✓ You have write permissions to the repository
+          
+          **Common Issues:**
+          - Invalid repository format
+          - Commit not found
+          - Branch doesn't exist
+          - Force push disabled and history diverged
+          EOF
