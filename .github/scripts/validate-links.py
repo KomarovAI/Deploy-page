@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Validate all links in static HTML site - detects 404s before deployment
-Filters out WordPress CMS artifacts and external URLs
 """
 import os
 import sys
@@ -21,48 +20,6 @@ class LinkExtractor(HTMLParser):
                 if attr in ['href', 'src'] and value:
                     self.links.append(value)
 
-def should_validate(link):
-    """
-    Determine if link should be validated as local file.
-    Returns False for external URLs, data URIs, anchors, etc.
-    """
-    if not link:
-        return False
-    
-    # Skip external protocols
-    if link.startswith(('http://', 'https://', 'ftp://', 'ftps://')):
-        return False
-    
-    # Skip protocol-relative URLs (//example.com)
-    if link.startswith('//'):
-        return False
-    
-    # Skip data URIs (base64 images, embedded SVGs)
-    if link.startswith('data:'):
-        return False
-    
-    # Skip action anchors, email, phone, javascript
-    if link.startswith(('#', 'mailto:', 'tel:', 'sms:', 'javascript:', 'about:')):
-        return False
-    
-    # Skip WordPress CMS artifacts
-    if any(pattern in link for pattern in ['wp-json', 'wp-admin', 'wp-content/plugins', 'wp-content/cache']):
-        return False
-    
-    # Skip OEmbed endpoints
-    if 'oembed' in link.lower():
-        return False
-    
-    # Skip .php files (server-side only)
-    if link.endswith('.php'):
-        return False
-    
-    # Skip empty fragments
-    if link == '#':
-        return False
-    
-    return True
-
 def validate_site(site_path):
     """Scan all HTML files and check link targets exist"""
     site_path = Path(site_path)
@@ -76,29 +33,32 @@ def validate_site(site_path):
                 parser.feed(f.read())
                 
                 for link in parser.links:
-                    # Skip external/special URLs
-                    if not should_validate(link):
+                    # Skip external/anchors - MUST CHECK ALL BEFORE URLPARSE
+                    if link.startswith(('http://', 'https://', 'ftp://', 'ftps://')):
+                        continue
+                    if link.startswith('//'):
+                        continue
+                    if link.startswith(('#', 'mailto:', 'tel:', 'sms:', 'javascript:', 'about:', 'data:')):
                         continue
                     
-                    # Parse the path, strip query string and fragment
-                    link_path = urlparse(link).path
+                    # Skip WordPress specific patterns
+                    if 'wp-json' in link or 'wp-admin' in link or 'oembed' in link.lower():
+                        continue
+                    if link.endswith('.php'):
+                        continue
+                    
+                    # Normalize path
+                    link_path = urlparse(link).path.split('?')[0]
                     if not link_path:
                         continue
                     
                     # Resolve relative to HTML file location
                     if link_path.startswith('/'):
-                        # Absolute path from site root
-                        target = site_path / link_path.lstrip('/')\n                    else:
-                        # Relative path from current file
+                        target = site_path / link_path.lstrip('/')
+                    else:
                         target = (html_file.parent / link_path).resolve()
                     
-                    # Normalize to avoid symlink issues
-                    try:
-                        target = target.resolve()
-                    except Exception:
-                        continue
-                    
-                    # Check if exists (cache to avoid duplicate checks)
+                    # Check if exists (cache checks)
                     target_key = str(target)
                     if target_key in checked:
                         continue
