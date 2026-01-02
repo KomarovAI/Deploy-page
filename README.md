@@ -8,7 +8,7 @@
 [![Workflow-Only](https://img.shields.io/badge/Execution-Workflow%20Only-orange?style=for-the-badge&logo=github-actions)](https://github.com/KomarovAI/Deploy-page)
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-success?style=for-the-badge)](https://github.com/KomarovAI/Deploy-page)
 
-**Automated static site deployment to GitHub Pages** through GitHub Actions workflow orchestration with artifact-based content delivery, intelligent path rewriting, link validation, automatic sitemap generation, and zero-downtime rollback mechanisms.
+**Automated static site deployment to GitHub Pages** through GitHub Actions workflow orchestration with artifact-based content delivery, intelligent path rewriting, link validation, automatic sitemap generation, `<base href>` injection for nested pages, and zero-downtime rollback mechanisms.
 
 ---
 
@@ -18,7 +18,7 @@
 # Root deployment
 gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo
 
-# Subpath deployment
+# Subpath deployment (with automatic <base href> injection)
 gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href="/project/"
 
 # Manual trigger from GitHub UI
@@ -27,7 +27,7 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 
 ---
 
-## 🐍 Python-Only Architecture (v3.2.0)
+## 🐍 Python-Only Architecture (v3.3.0)
 
 > **⚠️ IMPORTANT:** This project uses **ONLY Python** and Python libraries. No bash/sed/awk complexity!
 
@@ -93,8 +93,8 @@ Processing 45 HTML files...
 ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┓
 ┃ Metric            ┃ Value  ┃
 ┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━┩
-│ Files modified    │ 23     │
-│ Total changes     │ 156    │
+┃ Files modified    ┃ 23     ┃
+┃ Total changes     ┃ 156    ┃
 └───────────────────┴────────┘
 
 ✨ Successfully updated 23 file(s)!
@@ -166,6 +166,7 @@ except ImportError:
 - **Link Validation** - Checks all local links before deployment
 - **Broken Links Report** - JSON export for CI/CD integration
 - **Sitemap Auto-Generation** - Creates sitemap.xml from HTML structure
+- **🌟 NEW: `<base href>` Injection** - **Fixes nested page link issues automatically!**
 - **Robots.txt Support** - Ready for SEO optimization
 - **Idempotent Scripts** - Safe to run multiple times
 - **Automatic Rollback** - Git snapshot restoration on failure
@@ -183,7 +184,7 @@ except ImportError:
 | `artifact_name` | ❌ | `*-{run_id}` | Artifact name pattern |
 | `source_repo` | ❌ | `KomarovAI/web-crawler` | Artifact source repo |
 | `target_branch` | ❌ | `main` | Target branch |
-| `base_href` | ❌ | `/` | Base path (`/` or `/project/`) |
+| `base_href` | ❌ | `/` | Base path (`/` or `/project/`) - **auto-injects `<base>` tag** |
 
 ## 🔧 Processing Pipeline
 
@@ -210,130 +211,46 @@ Transforms URLs for GitHub Pages compatibility:
 <script src="/project/app.js">
 ```
 
-**Implementation:**
-```python
-from bs4 import BeautifulSoup
-from rich.console import Console
-from loguru import logger
-
-class PathFixer:
-    def fix_url(self, url: str) -> str:
-        parsed = urlparse(url)
-        # BeautifulSoup handles ALL edge cases!
-        return fixed_url
-```
-
-**Key Features:**
-- ✅ BeautifulSoup DOM manipulation (NO regex!)
-- ✅ lxml parser (2-3x faster)
-- ✅ Preserves query strings: `page?query=value`
-- ✅ Preserves anchors: `page#section`
-- ✅ Adds `.html` before queries: `page?q=1` → `page.html?q=1`
-- ✅ Idempotent (safe multiple runs)
-- ✅ Rich progress bars
-- ✅ Detailed per-file logging
-
 ### 2. Static Site Fixes
 
 **Technology:** Pure Python with BeautifulSoup + lxml
 
-**For WordPress static exports** - removes legacy JavaScript conflicts:
+For WordPress static exports - removes legacy JavaScript conflicts and injects `<base>` tags.
 
-#### Problems Solved
+### 3. 🌟 NEW: Base Href Tag Injection (v3.3.0)
 
-❌ **Fast clicks not working** - WordPress themes hijack click events  
-❌ **Broken navigation** - `e.preventDefault()` blocks links  
-❌ **Path conflicts** - Autoptimize cache expects WordPress URLs  
-❌ **404 errors** - Legacy admin files (`wp-login.php`, `xmlrpc.php`)
+**Problem:** Links work from root but BREAK on nested pages
 
-#### What It Does
+```html
+<!-- On /index.html: ./about.html resolves to /about.html ✅ -->
+<!-- On /services/design/index.html: ./about.html resolves to /services/design/about.html ❌ -->
+```
 
-1. **Removes Legacy JavaScript:**
-   ```python
-   # Python BeautifulSoup approach (NO sed!):
-   for script in soup.find_all('script', src=True):
-       if 'autoptimize' in script['src']:
-           script.decompose()  # Clean DOM removal
-   ```
+**Solution:** Inject `<base href="/">` in every `<head>`
 
-2. **Injects Click Handler Fix:**
-   ```python
-   # Uses BeautifulSoup tag creation:
-   script_tag = soup.new_tag('script')
-   script_tag.string = NAVIGATION_FIX_JS
-   body.append(script_tag)  # Safe injection
-   ```
+```html
+<head>
+    <meta charset="UTF-8">
+    <base href="/">  <!-- 🌟 FIX: All relative URLs resolve from root -->
+    <title>Page</title>
+</head>
+```
 
-3. **Cleans WordPress Artifacts:**
-   ```python
-   # Python pathlib (NO bash find!):
-   for file in Path.cwd().rglob('xmlrpc.php'):
-       file.unlink()
-   ```
+**Result:** ALL pages work correctly from ANY depth! ✅
 
-### 3. Link Validation ⭐ NEW v3.2.0
+**See:** [`NESTED_LINKS_FIX.md`](./NESTED_LINKS_FIX.md) for detailed explanation
+
+### 4. Link Validation ⭐
 
 **Technology:** Pure Python HTMLParser + pathlib
 
-Validates all local links before deployment:
+Validates all local links before deployment and generates `broken-links.json`.
 
-```python
-class LinkValidator(HTMLParser):
-    """Extract links from HTML"""
-    def __init__(self):
-        super().__init__()
-        self.links = []
-    
-    def handle_starttag(self, tag, attrs):
-        if tag in ['a', 'link', 'script', 'img', 'source']:
-            for attr, value in attrs:
-                if attr in ['href', 'src'] and value:
-                    self.links.append(value)
-```
-
-**Features:**
-- ✅ Scans all HTML files (href, src attributes)
-- ✅ Checks local link targets exist
-- ✅ Skips external URLs, mailto:, anchors
-- ✅ Generates `broken-links.json` for CI/CD
-- ✅ Shows first 50 broken links (prevents spam)
-- ✅ Full report in JSON for processing
-
-**Example Output:**
-```
-🔍 Validating links in ./site...
-✅ All 2,345 links valid
-
-✅ Generated sitemap.xml (1,247 URLs)
-```
-
-### 4. Sitemap Auto-Generation ⭐ NEW v3.2.0
+### 5. Sitemap Auto-Generation ⭐
 
 **Technology:** Pure Python pathlib + XML generation
 
-Automatically creates `sitemap.xml` from HTML structure:
-
-```python
-def generate_sitemap(self, cwd: Path, domain: str = "https://example.com") -> bool:
-    """Auto-generate sitemap.xml from HTML files"""
-    urls = []
-    
-    for html_file in sorted(cwd.rglob("*.html")):
-        # ... process URLs
-    
-    sitemap = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="...">
-    # ... add URLs
-    
-    (cwd / "sitemap.xml").write_text(sitemap, encoding='utf-8')
-    return True
-```
-
-**Features:**
-- ✅ Handles nested paths correctly
-- ✅ Proper URL formatting for index.html
-- ✅ W3C sitemap.org compliant
-- ✅ Ready for Google/Bing webmaster tools
-- ✅ Single file (no extra config needed)
+Automatically creates `sitemap.xml` from HTML structure (W3C compliant).
 
 ---
 
@@ -345,7 +262,7 @@ def generate_sitemap(self, cwd: Path, domain: str = "https://example.com") -> bo
 │   └── deploy.yml          # Main deployment workflow
 └── scripts/
     ├── fix-paths.sh        # Python script (BeautifulSoup + rich + lxml)
-    ├── fix-static-site.sh  # Python script (BeautifulSoup + rich + loguru)
+    ├── fix-static-site.sh  # Python script (BeautifulSoup + rich + loguru) [+ NEW: <base> injection]
     └── validate-deploy.sh  # Python script (BeautifulSoup + pydantic + rich)
 ```
 
@@ -367,6 +284,7 @@ Extension kept for backward compatibility with existing workflows.
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
+| Nested page links broken | Relative path resolution from current dir | ✅ **NEW v3.3.0** - `<base href>` tag auto-injected |
 | Fast clicks don't work | WordPress legacy JS | ✅ **FIXED** by fix-static-site.sh |
 | Navigation broken | `e.preventDefault()` | ✅ **FIXED** by click handler injection |
 | 404 on wp-login.php | WordPress artifacts | ✅ **FIXED** by artifact cleanup |
@@ -374,8 +292,6 @@ Extension kept for backward compatibility with existing workflows.
 | "No module named 'bs4'" | Missing dependency | ✅ **AUTO-FIXED** by script auto-install |
 | Artifact not found | Invalid `run_id` | Verify run_id in source repo Actions |
 | Push failed: 403 | PAT permissions | Add `contents:write` to PAT |
-| Validation too strict | Default strict mode | Set `STRICT_VALIDATION=false` |
-| Want stricter validation | Default soft mode | Set `STRICT_VALIDATION=true` in workflow |
 | Broken links in report | Invalid local paths | Check relative paths are correct |
 | Sitemap.xml not created | No HTML files found | Ensure HTML files exist in deployment |
 
@@ -390,6 +306,22 @@ env:
 
 ## 📊 Version History
 
+### v3.3.0 (2026-01-02) — `<base href>` Injection + Nested Links Fix 🌟
+
+**Added:**
+- ✨ **`<base href>` Tag Auto-Injection** - Fixes nested page link issues
+- ✨ **`inject_base_tag()` Method** - Injects into every HTML file
+- ✨ **Relative Path Validation** - Detects potential issues
+- 📈 **-0 KB overhead** - Integrated into fix-static-site.py (no extra files!)
+
+**Features:**
+- Automatically adds `<base href="/">` (or `/project/` if subpath)
+- Works with all relative link patterns (./page, ../page, page)
+- Fixes broken links on nested pages instantly
+- Can be customized via `base_href` workflow input
+
+**See:** [`NESTED_LINKS_FIX.md`](./NESTED_LINKS_FIX.md) for technical details
+
 ### v3.2.0 (2026-01-02) — Link Validation + Sitemap 🆕
 
 **Added:**
@@ -397,12 +329,6 @@ env:
 - ✨ **Sitemap Auto-Generator** - Creates sitemap.xml from HTML structure
 - ✨ **Broken Links JSON Report** - CI/CD integration ready
 - 📈 **-0 KB overhead** - Integrated into fix-static-site.py (no extra files!)
-
-**Features:**
-- Token-optimized (no extra files, single entry point)
-- W3C compliant sitemap generation
-- First 50 broken links saved to JSON
-- Silent on success, verbose on failure
 
 ### v3.1.0 (2026-01-01) — Premium Libraries 🚀
 
@@ -412,34 +338,12 @@ env:
 - ✨ **lxml** - Fast parser (industry standard)
 - ✨ **pydantic** - Type-safe validation (19.4K ⭐)
 
-**Performance:**
-- 🚀 **3x faster** HTML parsing (lxml vs html.parser)
-- 📉 **-19%** memory usage
-- 🎨 Beautiful progress bars and tables
-- 📝 Structured logging to `/tmp/*.log`
-
 ### v3.0.0 (2026-01-01) — Complete Python Rewrite 🎉
 
 **Breaking:**
 - 🔥 ALL bash/sed/awk → Python
 - 🔥 BeautifulSoup DOM manipulation
 - 🔥 Zero sed/awk fragility
-
-**Added:**
-- ✨ Object-oriented architecture
-- ✨ Type hints
-- ✨ Unit-testable code
-- ✨ Auto-dependency installation
-
-### v2.8 (2026-01-01) — WordPress Fixes
-
-- ✨ fix-static-site.sh script
-- ✨ Click handler injection
-- ✨ Legacy JS removal
-
-### v2.7.1 (2026-01-01) — Critical Fix
-
-- 🔥 Fixed sed regex issues with Python
 
 ## 🔗 Ecosystem
 
@@ -452,4 +356,4 @@ MIT - Free for commercial use
 
 ---
 
-**⚡ Built with 100% Python** | Production libraries only | Zero bash complexity | Token-efficient documentation | Link validation included
+**⚡ Built with 100% Python** | Production libraries only | Zero bash complexity | Token-efficient documentation | Link validation + Sitemap + `<base href>` injection included
