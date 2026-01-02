@@ -31,7 +31,7 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 
 > **⚠️ IMPORTANT:** This project uses **ONLY Python** and Python libraries. No bash/sed/awk complexity!
 
-### 🎯 Why Python-Only?
+### 🏃 Why Python-Only?
 
 | Before (bash/sed/awk) | After (Python) | Result |
 |----------------------|----------------|--------|
@@ -82,19 +82,19 @@ Processing 45 HTML files...
 
 **After (rich UI):**
 ```
-╭───────────────────────────────────╮
+╭────────────────────────────────────╮
 │ 🔧 GitHub Pages Path Fixer       │
 │ Using: BeautifulSoup + lxml ⚡   │
-╰───────────────────────────────────╯
+╰────────────────────────────────────╯
 
-⠋ Processing HTML files... ━━━━━━━━━━━━━━━━━━ 45/45 100%
+⠋ Processing HTML files... ─────────────────────────────────── 45/45 100%
 
            📊 Summary            
-┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┓
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┓
 ┃ Metric            ┃ Value  ┃
-┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━┩
-┃ Files modified    ┃ 23     ┃
-┃ Total changes     ┃ 156    ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━┩
+│ Files modified    │ 23     │
+│ Total changes     │ 156    │
 └───────────────────┴────────┘
 
 ✨ Successfully updated 23 file(s)!
@@ -167,6 +167,7 @@ except ImportError:
 - **Broken Links Report** - JSON export for CI/CD integration
 - **Sitemap Auto-Generation** - Creates sitemap.xml from HTML structure
 - **🌟 NEW: `<base href>` Injection** - **Fixes nested page link issues automatically!**
+- **🌟 NEW: WordPress Cleanup Guide** - **Comprehensive artifact removal strategy**
 - **Robots.txt Support** - Ready for SEO optimization
 - **Idempotent Scripts** - Safe to run multiple times
 - **Automatic Rollback** - Git snapshot restoration on failure
@@ -240,13 +241,35 @@ For WordPress static exports - removes legacy JavaScript conflicts and injects `
 
 **See:** [`NESTED_LINKS_FIX.md`](./NESTED_LINKS_FIX.md) for detailed explanation
 
-### 4. Link Validation ⭐
+### 4. 🌟 NEW: WordPress Cleanup (v3.3.0)
+
+**Problem:** WordPress static export leaves behind dangerous artifacts
+
+```html
+<!-- ❌ These BREAK your site: -->
+<script src="/wp-admin/..."></script>
+<script src="/wp-json/..."></script>
+<script src="/wp-includes/js/..."></script>
+<meta name="generator" content="WordPress 6.2.1">
+<!-- And many more... -->
+```
+
+**Solution:** Comprehensive cleanup strategy
+
+**See:** [`WORDPRESS_CLEANUP_GUIDE.md`](./WORDPRESS_CLEANUP_GUIDE.md) for:
+- 6 categories of WordPress artifacts
+- Priority-based removal strategy
+- Safety checklist
+- What's safe to keep
+- How to verify cleanup
+
+### 5. Link Validation ⭐
 
 **Technology:** Pure Python HTMLParser + pathlib
 
 Validates all local links before deployment and generates `broken-links.json`.
 
-### 5. Sitemap Auto-Generation ⭐
+### 6. Sitemap Auto-Generation ⭐
 
 **Technology:** Pure Python pathlib + XML generation
 
@@ -285,6 +308,7 @@ Extension kept for backward compatibility with existing workflows.
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Nested page links broken | Relative path resolution from current dir | ✅ **NEW v3.3.0** - `<base href>` tag auto-injected |
+| WordPress artifacts remain | Export includes WP files | ✅ **NEW v3.3.0** - See [WORDPRESS_CLEANUP_GUIDE.md](./WORDPRESS_CLEANUP_GUIDE.md) |
 | Fast clicks don't work | WordPress legacy JS | ✅ **FIXED** by fix-static-site.sh |
 | Navigation broken | `e.preventDefault()` | ✅ **FIXED** by click handler injection |
 | 404 on wp-login.php | WordPress artifacts | ✅ **FIXED** by artifact cleanup |
@@ -294,6 +318,13 @@ Extension kept for backward compatibility with existing workflows.
 | Push failed: 403 | PAT permissions | Add `contents:write` to PAT |
 | Broken links in report | Invalid local paths | Check relative paths are correct |
 | Sitemap.xml not created | No HTML files found | Ensure HTML files exist in deployment |
+| WP generator meta visible | WordPress cleanup incomplete | See [WORDPRESS_CLEANUP_GUIDE.md](./WORDPRESS_CLEANUP_GUIDE.md) |
+| Jetpack/Facebook scripts | Privacy/tracking artifacts | See [WORDPRESS_CLEANUP_GUIDE.md](./WORDPRESS_CLEANUP_GUIDE.md) for removal |
+
+### 📚 Comprehensive Guides
+
+- **[NESTED_LINKS_FIX.md](./NESTED_LINKS_FIX.md)** - Deep dive into relative path resolution issues
+- **[WORDPRESS_CLEANUP_GUIDE.md](./WORDPRESS_CLEANUP_GUIDE.md)** - Complete WordPress artifact catalog + removal strategies
 
 ### Debug Mode
 
@@ -306,29 +337,33 @@ env:
 
 ## 📊 Version History
 
-### v3.3.0 (2026-01-02) — `<base href>` Injection + Nested Links Fix 🌟
+### v3.3.0 (2026-01-02) — `<base href>` Injection + WordPress Cleanup 🌟
 
 **Added:**
 - ✨ **`<base href>` Tag Auto-Injection** - Fixes nested page link issues
 - ✨ **`inject_base_tag()` Method** - Injects into every HTML file
+- ✨ **WordPress Cleanup Guide** - Comprehensive artifact removal strategy (6 categories, 40+ items)
 - ✨ **Relative Path Validation** - Detects potential issues
-- 📈 **-0 KB overhead** - Integrated into fix-static-site.py (no extra files!)
+- 💾 **-0 KB overhead** - Integrated into fix-static-site.py (no extra files!)
 
 **Features:**
 - Automatically adds `<base href="/">` (or `/project/` if subpath)
 - Works with all relative link patterns (./page, ../page, page)
 - Fixes broken links on nested pages instantly
 - Can be customized via `base_href` workflow input
+- Documents all WordPress artifacts + removal strategies
 
-**See:** [`NESTED_LINKS_FIX.md`](./NESTED_LINKS_FIX.md) for technical details
+**See:** 
+- [`NESTED_LINKS_FIX.md`](./NESTED_LINKS_FIX.md) for technical details
+- [`WORDPRESS_CLEANUP_GUIDE.md`](./WORDPRESS_CLEANUP_GUIDE.md) for artifact catalog
 
-### v3.2.0 (2026-01-02) — Link Validation + Sitemap 🆕
+### v3.2.0 (2026-01-02) — Link Validation + Sitemap 🔍
 
 **Added:**
 - ✨ **Link Validator** - Checks all local links before deployment
 - ✨ **Sitemap Auto-Generator** - Creates sitemap.xml from HTML structure
 - ✨ **Broken Links JSON Report** - CI/CD integration ready
-- 📈 **-0 KB overhead** - Integrated into fix-static-site.py (no extra files!)
+- 💾 **-0 KB overhead** - Integrated into fix-static-site.py (no extra files!)
 
 ### v3.1.0 (2026-01-01) — Premium Libraries 🚀
 
@@ -356,4 +391,4 @@ MIT - Free for commercial use
 
 ---
 
-**⚡ Built with 100% Python** | Production libraries only | Zero bash complexity | Token-efficient documentation | Link validation + Sitemap + `<base href>` injection included
+**⚡ Built with 100% Python** | Production libraries only | Zero bash complexity | Token-efficient documentation | Link validation + Sitemap + `<base href>` injection + WordPress cleanup included
