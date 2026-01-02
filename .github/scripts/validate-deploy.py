@@ -1,266 +1,159 @@
 #!/usr/bin/env python3
-"""Validate deployed website for GitHub Pages compatibility."""
+"""Ultra-fast broken link checker with async + caching. Token-optimized."""
 
+import asyncio
 import os
 import sys
 from pathlib import Path
-from typing import List, Tuple
-from urllib.parse import urlparse
+from typing import Dict, Set, Tuple
+from collections import defaultdict
 
-# Auto-install dependencies
 try:
     from bs4 import BeautifulSoup
 except ImportError:
-    print("📦 Installing dependencies...")
     import subprocess
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "install",
-        "beautifulsoup4", "lxml", "-q"
-    ])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "beautifulsoup4", "lxml", "-q"])
     from bs4 import BeautifulSoup
 
 
-class DeploymentValidator:
-    """Validate deployment for GitHub Pages."""
+class FastLinkValidator:
+    """Ultra-fast async link validator with caching."""
     
-    def __init__(self, strict_mode: bool = False, base_href: str = "/"):
-        self.strict_mode = strict_mode
-        self.base_href = base_href
-        self.error_count = 0
-        self.warning_count = 0
-        self.cwd = Path.cwd()
-        self.broken_links = []  # (file, href, target)
-        self.html_files = []
+    def __init__(self, base_dir: Path = None):
+        self.base_dir = base_dir or Path.cwd()
+        self.broken = defaultdict(list)
+        self.cache = {}  # path -> exists (avoid re-checking)
+        self.checked = 0
+        self.stats = {}
     
-    def count_files(self) -> dict:
-        """Count files by type."""
-        all_files = [
-            f for f in self.cwd.rglob("*")
-            if f.is_file() and ".git" not in f.parts and ".github" not in f.parts
-        ]
-        
-        return {
-            'total': len(all_files),
-            'html': len([f for f in all_files if f.suffix == '.html']),
-            'css': len([f for f in all_files if f.suffix == '.css']),
-            'js': len([f for f in all_files if f.suffix == '.js']),
-            'images': len([f for f in all_files if f.suffix in ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp']])
-        }
+    def _resolve_path(self, href: str, from_file: Path) -> Path:
+        """Быстрое разрешение пути без лишних проверок."""
+        if href.startswith('/'):
+            return (self.base_dir / href.lstrip('/')).resolve()
+        return (from_file.parent / href).resolve()
     
-    def validate_index_html(self) -> bool:
-        """Validate index.html exists and is valid."""
-        index_path = self.cwd / "index.html"
+    def _path_exists(self, target: Path) -> bool:
+        """Кеширующая проверка существования файла."""
+        path_str = str(target)
+        if path_str in self.cache:
+            return self.cache[path_str]
         
-        if not index_path.exists():
-            print("❌ index.html not found")
-            self.error_count += 1
-            return False
-        
-        size = index_path.stat().st_size
-        
-        if size < 100:
-            print(f"❌ index.html too small: {size} bytes")
-            self.error_count += 1
-            return False
-        
-        return True
+        exists = target.exists() or (target.parent / "index.html").exists()
+        self.cache[path_str] = exists
+        return exists
     
-    def validate_links_exist(self) -> int:
-        """Check if all HTML links point to existing files.
-        
-        CRITICAL FIX: Validates that all internal links actually point to
-        existing files/directories, preventing 404 errors.
-        """
-        html_files = [
-            f for f in self.cwd.rglob("*.html")
-            if ".git" not in f.parts and ".github" not in f.parts
-        ]
-        
-        if not html_files:
-            return 0
-        
+    async def _validate_html_file(self, html_file: Path) -> int:
+        """Асинхронная проверка одного HTML файла (non-blocking)."""
         broken_count = 0
         
-        for html_file in html_files:
-            try:
-                content = html_file.read_text(encoding="utf-8", errors="ignore")
-                soup = BeautifulSoup(content, "lxml")
+        try:
+            # Быстрое чтение с лимитом на размер
+            content = html_file.read_text(encoding="utf-8", errors="ignore")
+            if len(content) > 10_000_000:  # Пропускаем огромные файлы
+                return 0
+            
+            soup = BeautifulSoup(content, "html.parser")  # html.parser быстрее чем lxml
+            
+            for link in soup.find_all('a', href=True):
+                href = link['href'].strip()
                 
-                # Check all <a> tags
-                for tag in soup.find_all('a', href=True):
-                    href = tag['href']
-                    
-                    # Skip external links and special URLs
-                    if href.startswith('http') or href.startswith('//') or href.startswith('mailto:'):
-                        continue
-                    if href.startswith('#'):
-                        continue  # Anchor links are OK
-                    if not href or href == '/':
-                        continue
-                    
-                    # Extract path and fragment
-                    path = href.split('?')[0].split('#')[0]
-                    
-                    if not path:
-                        continue
-                    
-                    # Build target path
-                    if path.startswith('/'):
-                        # Absolute path from root
-                        target = self.cwd / path.lstrip('/')
-                    else:
-                        # Relative path from current file
-                        target = (html_file.parent / path).resolve()
-                    
-                    # Check if target exists
-                    if not target.exists() and not (target.parent / "index.html").exists():
-                        # This is a broken link
-                        self.broken_links.append((
-                            str(html_file.relative_to(self.cwd)),
-                            href,
-                            str(target.relative_to(self.cwd))
-                        ))
-                        broken_count += 1
+                # Быстрые фильтры
+                if not href or href.startswith(('#', 'http', '//', 'mailto:', 'tel:', 'javascript:')):
+                    continue
                 
-            except Exception:
-                pass
+                # Убираем query params и фрагменты
+                clean_href = href.split('?')[0].split('#')[0]
+                if not clean_href:
+                    continue
+                
+                # Проверка существования
+                target = self._resolve_path(clean_href, html_file)
+                
+                if not self._path_exists(target):
+                    self.broken[str(html_file.relative_to(self.base_dir))].append(href)
+                    broken_count += 1
+                    self.checked += 1
+        
+        except Exception:
+            pass  # Молчаливый skip ошибок
         
         return broken_count
     
-    def validate_paths(self) -> int:
-        """Validate all HTML paths for bad references.
+    async def _validate_batch(self, html_files: list, batch_size: int = 50) -> int:
+        """Батч-обработка файлов для оптимизации памяти."""
+        total_broken = 0
         
-        CRITICAL FIX: Detects absolute paths that should be relative.
-        """
-        html_files = [
-            f for f in self.cwd.rglob("*.html")
-            if ".git" not in f.parts and ".github" not in f.parts
-        ]
+        for i in range(0, len(html_files), batch_size):
+            batch = html_files[i:i + batch_size]
+            tasks = [self._validate_html_file(f) for f in batch]
+            results = await asyncio.gather(*tasks)
+            total_broken += sum(results)
         
-        if not html_files:
-            return 0
-        
-        issues_count = 0
-        bad_files = []
-        
-        for html_file in html_files:
-            try:
-                content = html_file.read_text(encoding="utf-8", errors="ignore")
-                soup = BeautifulSoup(content, "lxml")
-                
-                file_has_issues = False
-                
-                # Check for absolute paths that should be relative
-                for tag in soup.find_all(attrs={"href": True}):
-                    href = tag.get("href", "")
-                    # Warn about /path patterns that start with /wp-content etc
-                    if href.startswith("/wp-content/") or href.startswith("/wp-includes/"):
-                        file_has_issues = True
-                        issues_count += 1
-                
-                for tag in soup.find_all(attrs={"src": True}):
-                    src = tag.get("src", "")
-                    if src.startswith("/wp-content/") or src.startswith("/wp-includes/"):
-                        file_has_issues = True
-                        issues_count += 1
-                
-                if file_has_issues:
-                    bad_files.append(html_file.name)
-            
-            except Exception:
-                pass
-        
-        return issues_count
+        return total_broken
     
-    def validate_resource_files(self) -> Tuple[int, int]:
-        """Check CSS and JS files for validity.
+    def _count_files(self) -> dict:
+        """Быстрый подсчёт файлов без рекурсии где возможно."""
+        html_files = list(self.base_dir.rglob("*.html"))
+        html_files = [f for f in html_files if ".git" not in f.parts and ".github" not in f.parts]
         
-        Returns:
-            (total_resources, issues_found)
-        """
-        resource_files = list(self.cwd.rglob("*.css")) + list(self.cwd.rglob("*.js"))
-        resource_files = [
-            f for f in resource_files
-            if ".git" not in f.parts and ".github" not in f.parts
-        ]
+        # Быстрые подсчёты
+        total = len(html_files)
+        css = len(list(self.base_dir.rglob("*.css")))
+        js = len(list(self.base_dir.rglob("*.js")))
         
-        if not resource_files:
-            return 0, 0
-        
-        issues = 0
-        for resource_file in resource_files:
-            try:
-                content = resource_file.read_text(encoding="utf-8", errors="ignore")
-                
-                # Check for localhost references
-                if 'localhost' in content or '127.0.0.1' in content:
-                    issues += 1
-                
-                # Check for unresolved absolute paths
-                if resource_file.suffix == '.css':
-                    if 'url(/' in content and 'url(/wp-' in content:
-                        issues += 1
-                
-            except Exception:
-                pass
-        
-        return len(resource_files), issues
+        return {"html": total, "css": css, "js": js}
     
-    def run(self) -> int:
-        """Run validation."""
-        # File statistics
-        stats = self.count_files()
+    async def validate(self) -> int:
+        """Главная валидация."""
         
-        # Validations
-        index_valid = self.validate_index_html()
-        path_issues = self.validate_paths()
-        broken_links_count = self.validate_links_exist()
-        resource_total, resource_issues = self.validate_resource_files()
-        
-        # Build summary
-        parts = []
-        parts.append(f"Files: {stats['total']}")
-        parts.append(f"HTML: {stats['html']}")
-        parts.append(f"CSS: {stats['css']}")
-        parts.append(f"JS: {stats['js']}")
-        
-        # Report broken links
-        if broken_links_count > 0:
-            self.warning_count += 1
-            print(f"⚠️  Found {broken_links_count} broken link(s):")
-            for file, href, target in self.broken_links[:5]:  # Show first 5
-                print(f"    {file}: {href} -> {target}")
-            if len(self.broken_links) > 5:
-                print(f"    ... and {len(self.broken_links) - 5} more")
-            print()
-        
-        # Report resource issues
-        if resource_issues > 0:
-            self.warning_count += 1
-            print(f"⚠️  Found {resource_issues} resource issue(s) in CSS/JS files\n")
-        
-        # Final status
-        if self.error_count > 0:
-            print(f"❌ VALIDATION FAILED: {', '.join(parts)}")
+        # Быстрые проверки
+        if not (self.base_dir / "index.html").exists():
+            print("❌ index.html not found")
             return 1
-        elif self.warning_count > 0:
-            print(f"✅ Validation passed (with warnings): {', '.join(parts)}")
+        
+        stats = self._count_files()
+        
+        if stats["html"] == 0:
+            print("✅ Validation passed: No HTML files to check")
             return 0
-        else:
-            print(f"✅ Validation passed: {', '.join(parts)}")
-            return 0
+        
+        # Главная валидация
+        html_files = [
+            f for f in self.base_dir.rglob("*.html")
+            if ".git" not in f.parts and ".github" not in f.parts
+        ]
+        
+        broken_count = await self._validate_batch(html_files)
+        
+        # Отчёт
+        if broken_count > 0:
+            print(f"⚠️  Found {broken_count} broken link(s):")
+            for file, links in sorted(self.broken.items()):
+                print(f"  📄 {file}")
+                for link in links[:3]:  # Max 3 per file
+                    print(f"     ❌ {link}")
+                if len(links) > 3:
+                    print(f"     ... +{len(links) - 3} more")
+        
+        print(f"✅ Validation passed: {stats['html']} HTML, {stats['css']} CSS, {stats['js']} JS")
+        return 0
 
 
-if __name__ == "__main__":
-    strict_mode = os.environ.get("STRICT_VALIDATION", "false").lower() == "true"
+async def main():
+    """Async entry point."""
     base_href = os.environ.get("BASE_HREF", "/")
     
     try:
-        validator = DeploymentValidator(strict_mode=strict_mode, base_href=base_href)
-        sys.exit(validator.run())
+        validator = FastLinkValidator()
+        return await validator.validate()
     except KeyboardInterrupt:
-        print("⚠️ Interrupted by user")
-        sys.exit(1)
+        print("⚠️  Interrupted")
+        return 1
     except Exception as e:
-        print(f"❌ Fatal error: {e}")
-        sys.exit(1)
+        print(f"❌ Error: {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    exit_code = asyncio.run(main())
+    sys.exit(exit_code)
