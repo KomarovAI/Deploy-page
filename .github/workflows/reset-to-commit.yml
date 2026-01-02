@@ -1,0 +1,81 @@
+name: Reset Repository to Commit
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_commit:
+        description: 'Target commit hash to reset to'
+        required: true
+        type: string
+      force_push:
+        description: 'Use force push (overwrite remote history)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Validate commit exists
+        run: |
+          if ! git cat-file -t "${{ github.event.inputs.target_commit }}" > /dev/null 2>&1; then
+            echo "❌ Commit ${{ github.event.inputs.target_commit }} not found!"
+            exit 1
+          fi
+          echo "✅ Commit found: $(git log -1 --format=%H ${{ github.event.inputs.target_commit }})"
+          echo "📝 Commit message: $(git log -1 --format=%s ${{ github.event.inputs.target_commit }})"
+
+      - name: Reset to target commit
+        run: |
+          echo "🔄 Resetting to commit: ${{ github.event.inputs.target_commit }}"
+          git reset --hard ${{ github.event.inputs.target_commit }}
+          echo "✅ Local reset complete"
+          echo "📊 Current HEAD:"
+          git log -1 --oneline
+
+      - name: Push changes
+        run: |
+          if [ "${{ github.event.inputs.force_push }}" = "true" ]; then
+            echo "⚠️ Using force push (--force-with-lease)"
+            git push --force-with-lease origin ${{ github.ref_name }}
+          else
+            echo "📤 Using safe push"
+            git push origin ${{ github.ref_name }}
+          fi
+
+      - name: Workflow Summary
+        if: success()
+        run: |
+          echo "## ✅ Reset Successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository Reset Completed**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target Commit:** \`${{ github.event.inputs.target_commit }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Current State" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          git log -1 --format="Commit: %H%nAuthor: %an%nDate: %ai%nMessage: %s" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Workflow Error
+        if: failure()
+        run: |
+          echo "## ❌ Reset Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Please check the commit hash and try again." >> $GITHUB_STEP_SUMMARY
