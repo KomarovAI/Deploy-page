@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Validate all links in static HTML site - detects 404s before deployment
+Filters out WordPress CMS artifacts that don't belong in static exports
 """
 import os
 import sys
@@ -19,6 +20,16 @@ class LinkExtractor(HTMLParser):
             for attr, value in attrs:
                 if attr in ['href', 'src'] and value:
                     self.links.append(value)
+
+def is_wp_artifact(link_path):
+    """Check if link is WordPress CMS artifact that shouldn't exist in static export"""
+    wp_patterns = (
+        'wp-json/',          # REST API endpoints
+        'wp-content/plugins/',  # Plugin files
+        'wp-content/cache/',    # Cache files
+        'wp-includes/',         # WordPress core
+    )
+    return any(pattern in link_path for pattern in wp_patterns) or link_path.endswith('.php')
 
 def validate_site(site_path):
     """Scan all HTML files and check link targets exist"""
@@ -39,6 +50,10 @@ def validate_site(site_path):
                     
                     # Normalize path
                     link_path = urlparse(link).path.split('?')[0]
+                    
+                    # Skip WordPress artifacts
+                    if is_wp_artifact(link_path):
+                        continue
                     
                     # Resolve relative to HTML file location
                     if link_path.startswith('/'):
