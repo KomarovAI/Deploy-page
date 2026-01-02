@@ -2,7 +2,7 @@
 """
 Fix static site for GitHub Pages + WordPress cleanup
 """
-import os, sys, re, json
+import os, sys, re
 from pathlib import Path
 from bs4 import BeautifulSoup
 from collections import defaultdict
@@ -116,11 +116,11 @@ class StaticSiteFixer:
                 
                 self.files_processed += 1
             except Exception as e:
-                console.print(f"⚠️  {html_file}: {e}", style="yellow")
+                console.print(f"\u26a0️  {html_file}: {e}", style="yellow")
     
     def report(self):
         """Print summary"""
-        table = Table(title="📊 Summary")
+        table = Table(title="\ud83d\udcca Summary")
         table.add_column("Metric", style="cyan")
         table.add_column("Value", style="green")
         table.add_row("Files processed", str(self.files_processed))
@@ -138,20 +138,20 @@ def main():
     base_href = sys.argv[2] if len(sys.argv) > 2 else "/"
     
     if not Path(site_path).exists():
-        print(f"❌ Path not found: {site_path}")
+        print(f"\u274c Path not found: {site_path}")
         sys.exit(1)
     
-    console.print(f"\n🔧 Fixing static site: {site_path}", style="bold")
-    console.print(f"📌 Base href: {base_href}\n")
+    console.print(f"\n\ud83d\udd27 Fixing static site: {site_path}", style="bold")
+    console.print(f"\ud83d\udccc Base href: {base_href}\n")
     
     fixer = StaticSiteFixer()
     fixer.process(site_path, base_href)
     fixer.report()
     
     if fixer.changes_made > 0:
-        console.print(f"\n✅ Updated {fixer.changes_made} file(s)!\n", style="green")
+        console.print(f"\n\u2705 Updated {fixer.changes_made} file(s)!\n", style="green")
     else:
-        console.print("\n✨ No changes needed!\n", style="green")
+        console.print("\n\u2728 No changes needed!\n", style="green")
 
 if __name__ == '__main__':
     main()
