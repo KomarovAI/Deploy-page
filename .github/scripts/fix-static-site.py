@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 import re
+from html.parser import HTMLParser
+from urllib.parse import urljoin, urlparse
 
 # Auto-install dependencies
 try:
@@ -19,6 +21,19 @@ except ImportError:
         "beautifulsoup4", "lxml", "-q"
     ])
     from bs4 import BeautifulSoup
+
+
+class LinkValidator(HTMLParser):
+    """Extract all links from HTML (token-optimized)"""
+    def __init__(self):
+        super().__init__()
+        self.links = []
+    
+    def handle_starttag(self, tag, attrs):
+        if tag in ['a', 'link', 'script', 'img', 'source']:
+            for attr, value in attrs:
+                if attr in ['href', 'src'] and value:
+                    self.links.append(value)
 
 
 class StaticSiteFixer:
@@ -79,6 +94,8 @@ class StaticSiteFixer:
         self.data_attrs_fixed = 0
         self.shortcodes_detected = []
         self.restructure_map: Dict[str, str] = {}
+        self.broken_links = []
+        self.sitemap_urls = []
     
     def detect_directory_structure(self, filename: str) -> Optional[Tuple[str, str]]:
         """Detect directory structure from flattened filename.
@@ -108,6 +125,76 @@ class StaticSiteFixer:
                     return (prefix, rest)
         
         return None
+    
+    def validate_links(self, cwd: Path) -> int:
+        """Validate all links exist (integrated, token-optimized)"""
+        checked, broken = set(), []
+        
+        for html_file in sorted(cwd.rglob("*.html")):
+            if ".git" in html_file.parts or ".github" in html_file.parts:
+                continue
+            
+            try:
+                with open(html_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    parser = LinkValidator()
+                    parser.feed(f.read())
+                    
+                    for link in parser.links:
+                        # Skip external/special
+                        if link.startswith(('http://', 'https://', '#', 'mailto:', 'tel:', 'javascript:')):
+                            continue
+                        
+                        link_path = urlparse(link).path.split('?')[0]
+                        
+                        # Resolve path
+                        if link_path.startswith('/'):\
+                            target = cwd / link_path.lstrip('/')\
+                        else:\
+                            target = (html_file.parent / link_path).resolve()
+                        
+                        target_key = str(target)
+                        if target_key in checked:\
+                            continue
+                        checked.add(target_key)
+                        
+                        if not target.exists():
+                            broken.append({\
+                                'source': str(html_file.relative_to(cwd)),\
+                                'link': link,\
+                                'target': str(target.relative_to(cwd)) if target.is_relative_to(cwd) else str(target)\
+                            })
+            \
+            except Exception:
+                pass
+        
+        self.broken_links = broken[:50]  # Cap at 50
+        return len(broken)
+    
+    def generate_sitemap(self, cwd: Path, domain: str = "https://example.com") -> bool:
+        """Auto-generate sitemap.xml from HTML files"""
+        urls = []
+        
+        for html_file in sorted(cwd.rglob("*.html")):
+            if any(x in html_file.parts for x in [".git", ".github", "404.html"]):
+                continue
+            
+            rel = html_file.relative_to(cwd)
+            
+            if rel.name == "index.html":\
+                url = f"/{'/'.join(rel.parts[:-1])}/"\
+            else:\
+                url = f"/{rel.parent / rel.stem}/"\
+            
+            urls.append(url.replace('\\', '/'))
+        
+        sitemap = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        for url in urls:\
+            sitemap += f'  <url><loc>{domain}{url}</loc></url>\n'
+        sitemap += '</urlset>'
+        
+        (cwd / "sitemap.xml").write_text(sitemap, encoding='utf-8')
+        self.sitemap_urls = urls
+        return True
     
     def restructure_files(self, cwd: Path) -> int:
         """Restructure HTML files by creating proper folder structure."""
@@ -244,18 +331,7 @@ class StaticSiteFixer:
         return fixed
     
     def fix_css_files(self, cwd: Path) -> int:
-        """Fix absolute URLs inside external CSS files (Elementor issue).
-        
-        CRITICAL FIX: CSS files contain url() references with absolute paths
-        that must be converted to relative paths for GitHub Pages.
-        
-        Example:
-            /wp-content/uploads/elementor/css/post-123.css contains:
-            background: url(http://localhost:8000/wp-content/uploads/bg.jpg)
-            
-            Should be converted to:
-            background: url(../../wp-content/uploads/bg.jpg)
-        """
+        """Fix absolute URLs inside external CSS files (Elementor issue)."""
         css_files = list(cwd.rglob("*.css"))
         if not css_files:
             return 0
@@ -266,8 +342,6 @@ class StaticSiteFixer:
                 content = css_file.read_text(encoding='utf-8', errors='ignore')
                 
                 # Replace http://domain/path with relative path
-                # Match: url(http://localhost:8000/wp-content/uploads/...)
-                # Replace with: url(../../wp-content/uploads/...)
                 modified = re.sub(
                     r'url\(\s*(["\']?)https?://[^/]+(/[^"\')]+)\1\s*\)',
                     r'url(.\2)',
@@ -284,16 +358,7 @@ class StaticSiteFixer:
         return fixed
     
     def fix_data_attributes(self, soup: BeautifulSoup) -> int:
-        """Fix data-* attributes containing URLs (Elementor/WP patterns).
-        
-        CRITICAL FIX: Elementor uses custom data attributes for background images,
-        srcset URLs, and other dynamic content that needs path correction.
-        
-        Examples:
-            data-src="/wp-content/uploads/image.jpg"
-            data-background="/wp-content/uploads/bg.jpg"
-            data-settings='{"url":"/wp-content/video.mp4"}'
-        """
+        """Fix data-* attributes containing URLs (Elementor/WP patterns)."""
         fixed = 0
         
         for tag in soup.find_all(True):  # All tags
@@ -315,10 +380,7 @@ class StaticSiteFixer:
         return fixed
     
     def fix_srcset_attribute(self, img_tag) -> bool:
-        """Fix URLs in srcset attribute.
-        
-        Format: "url1 500w, url2 1000w, url3 2x"
-        """
+        """Fix URLs in srcset attribute."""
         srcset = img_tag.get('srcset', '')
         if not srcset or 'wp-content' not in srcset:
             return False
@@ -344,10 +406,7 @@ class StaticSiteFixer:
         return False
     
     def detect_shortcodes(self, soup: BeautifulSoup) -> List[str]:
-        """Detect remaining WordPress shortcodes.
-        
-        WARNING: These indicate dynamic content that won't work on static site.
-        """
+        """Detect remaining WordPress shortcodes."""
         shortcodes = []
         text_content = soup.get_text()
         
@@ -358,14 +417,7 @@ class StaticSiteFixer:
         return shortcodes
     
     def remove_wordpress_meta_links(self, soup: BeautifulSoup) -> int:
-        """Remove WordPress-specific meta links.
-        
-        These cause 404 errors on static sites:
-            - EditURI (RSD XML-RPC)
-            - wlwmanifest (Windows Live Writer)
-            - shortlink (WordPress internal)
-            - pingback (WordPress pingback)
-        """
+        """Remove WordPress-specific meta links."""
         removed = 0
         
         for link in soup.find_all('link', rel=True):
@@ -380,10 +432,7 @@ class StaticSiteFixer:
         return removed
     
     def remove_problematic_scripts(self, soup: BeautifulSoup) -> int:
-        """Remove inline scripts that reference undefined variables.
-        
-        CRITICAL FIX: These scripts cause console errors on static sites.
-        """
+        """Remove inline scripts that reference undefined variables."""
         removed = 0
         
         # Remove script tags by content
@@ -399,10 +448,7 @@ class StaticSiteFixer:
         return removed
     
     def fix_canonical_urls(self, soup: BeautifulSoup, target_domain: Optional[str] = None) -> int:
-        """Fix canonical URLs to point to correct domain.
-        
-        Default behavior: Remove canonical tags pointing to localhost
-        """
+        """Fix canonical URLs to point to correct domain."""
         fixed = 0
         
         for link in soup.find_all('link', rel='canonical', href=True):
@@ -608,6 +654,25 @@ class StaticSiteFixer:
         if self.scripts_removed > 0:
             print(f"✅ Removed {self.scripts_removed} problematic scripts/links\n")
         
+        # STEP 5: Validate links
+        broken_count = self.validate_links(cwd)
+        if broken_count > 0:
+            print(f"\n❌ Found {broken_count} broken links (first 50 shown):")
+            for item in self.broken_links[:15]:
+                print(f"  📄 {item['source']}: {item['link']}")
+            if len(self.broken_links) > 15:
+                print(f"  ... and {len(self.broken_links) - 15} more")
+            
+            with open('broken-links.json', 'w') as f:
+                json.dump(self.broken_links, f, indent=2)
+            print("\n📋 Full report: broken-links.json")
+        else:
+            print(f"\n✅ Link validation: all {len(html_files)} files passed\n")
+        
+        # STEP 6: Generate sitemap
+        if self.generate_sitemap(cwd):
+            print(f"✅ Generated sitemap.xml ({len(self.sitemap_urls)} URLs)\n")
+        
         # Shortcode warnings
         if self.shortcodes_detected:
             print("⚠️  DETECTED DYNAMIC SHORTCODES (won't work on static site):")
@@ -617,7 +682,7 @@ class StaticSiteFixer:
                 print(f"    ... and {len(self.shortcodes_detected) - 5} more file(s)")
             print()
         
-        return 0
+        return 0 if broken_count == 0 else 1
 
 
 if __name__ == "__main__":
