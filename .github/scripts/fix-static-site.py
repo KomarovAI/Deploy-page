@@ -3,6 +3,7 @@
 
 import sys
 import shutil
+import json
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 import re
@@ -48,6 +49,25 @@ class StaticSiteFixer:
         'jquery-migrate'
     ]
     
+    # Problematic inline scripts (WordPress/Elementor)
+    PROBLEMATIC_PATTERNS = [
+        'elementorFrontend',
+        'elementorEditorConfig',
+        'wp.emoji',
+        'wp.a11y',
+        '_wpnonce',
+        'addComment.moveForm',
+        'document.write'
+    ]
+    
+    # WordPress meta links to remove
+    WP_META_RELS = [
+        'EditURI',
+        'wlwmanifest',
+        'shortlink',
+        'pingback'
+    ]
+    
     def __init__(self):
         self.files_processed = 0
         self.js_injected = 0
@@ -55,7 +75,10 @@ class StaticSiteFixer:
         self.files_restructured = 0
         self.links_fixed = 0
         self.resources_fixed = 0
-        self.restructure_map: Dict[str, str] = {}  # old_name -> new_path
+        self.css_fixed = 0
+        self.data_attrs_fixed = 0
+        self.shortcodes_detected = []
+        self.restructure_map: Dict[str, str] = {}
     
     def detect_directory_structure(self, filename: str) -> Optional[Tuple[str, str]]:
         """Detect directory structure from flattened filename.
@@ -81,28 +104,16 @@ class StaticSiteFixer:
                 rest = filename[len(prefix):]
                 
                 # CRITICAL CHECK: If rest starts with hyphen, this is NOT a nested page
-                # Example: "news-insights" has rest="-insights" → standalone page
-                # Example: "newschristmas" has rest="christmas" → nested page
                 if rest and not rest.startswith('-'):
                     return (prefix, rest)
         
         return None
     
     def restructure_files(self, cwd: Path) -> int:
-        """Restructure HTML files by creating proper folder structure.
-        
-        This fixes GitHub Pages 404 errors by creating folder structure compatible
-        with GitHub Pages routing.
-        
-        Transforms:
-            sectorsbars-pubs.html -> sectors/bars-pubs/index.html
-            servicesdesign-sales.html -> services/design-sales/index.html
-            news-insights.html -> news-insights/index.html (NOT news/-insights/)
-        """
+        """Restructure HTML files by creating proper folder structure."""
         print("\n📁 RESTRUCTURING PAGES:")
         print("━" * 80)
         
-        # Find all HTML files recursively, excluding .git and .github
         html_files = [
             f for f in cwd.rglob("**/*.html")
             if f.name.lower() not in self.SKIP_RESTRUCTURE
@@ -119,48 +130,33 @@ class StaticSiteFixer:
         restructured = 0
         for html_file in html_files:
             try:
-                # Get relative path from cwd
                 rel_path = html_file.relative_to(cwd)
                 parent_dir = rel_path.parent
-                base_name = html_file.stem  # filename without .html
+                base_name = html_file.stem
                 
-                # Detect if filename is flattened (e.g., sectorsbars-pubs)
                 detected_structure = self.detect_directory_structure(base_name)
                 
                 if detected_structure:
-                    # Flattened filename detected - restore directory structure
                     dir_prefix, file_base = detected_structure
                     
-                    # CRITICAL: Build CORRECT path with directories
                     if str(parent_dir) == '.':
-                        # File is in root directory
                         target_folder = cwd / dir_prefix / file_base
                     else:
-                        # File is in a subdirectory
                         target_folder = cwd / parent_dir / dir_prefix / file_base
                     
-                    # CREATE the target folder
                     target_folder.mkdir(parents=True, exist_ok=True)
-                    
-                    # Target file: directory/basename/index.html
                     target_file = target_folder / "index.html"
                     
-                    # Copy file content to new location
                     shutil.copy2(html_file, target_file)
-                    
-                    # Remove original file
                     html_file.unlink()
                     
-                    old_name = html_file.name  # e.g., sectorsbars-pubs.html
-                    new_path = f"{dir_prefix}/{file_base}/"  # e.g., sectors/bars-pubs/
-                    
-                    # Store mapping for link fixing
+                    old_name = html_file.name
+                    new_path = f"{dir_prefix}/{file_base}/"
                     self.restructure_map[old_name] = new_path
                     
                     old_structure = str(rel_path)
                     new_structure = str(target_file.relative_to(cwd))
                     
-                    # DETAILED OUTPUT - показываем каждую страницу
                     print(f"   ✓ {old_structure}")
                     print(f"     → {new_structure}")
                     print(f"     🌐 URL: /{new_path}")
@@ -169,39 +165,27 @@ class StaticSiteFixer:
                     restructured += 1
                 
                 else:
-                    # Normal filename (not flattened) - check if needs restructuring
                     if base_name in ['index', '404']:
-                        # Keep index.html and 404.html as-is
                         continue
                     
-                    # Create folder for this file: parent/basename/index.html
                     if str(parent_dir) == '.':
                         target_folder = cwd / base_name
                     else:
                         target_folder = cwd / parent_dir / base_name
                     
-                    # CREATE the target folder
                     target_folder.mkdir(parents=True, exist_ok=True)
-                    
-                    # Target file
                     target_file = target_folder / "index.html"
                     
-                    # Copy file content to new location
                     shutil.copy2(html_file, target_file)
-                    
-                    # Remove original file
                     html_file.unlink()
                     
-                    old_name = html_file.name  # e.g., contact.html
-                    new_path = f"{base_name}/"  # e.g., contact/
-                    
-                    # Store mapping
+                    old_name = html_file.name
+                    new_path = f"{base_name}/"
                     self.restructure_map[old_name] = new_path
                     
                     old_structure = str(rel_path)
                     new_structure = str(target_file.relative_to(cwd))
                     
-                    # DETAILED OUTPUT - показываем каждую страницу
                     print(f"   ✓ {old_structure}")
                     print(f"     → {new_structure}")
                     print(f"     🌐 URL: /{new_path}")
@@ -218,21 +202,7 @@ class StaticSiteFixer:
         return restructured
     
     def fix_resource_paths(self, soup: BeautifulSoup, depth: int) -> int:
-        """Fix relative paths to CSS/JS/images after restructuring.
-        
-        CRITICAL FIX: Convert relative paths to work from subdirectories.
-        
-        Args:
-            soup: BeautifulSoup parsed HTML
-            depth: Folder nesting depth (news-insights/ = 1, sectors/bars/ = 2)
-        
-        Examples:
-            depth=1: wp-content/... → ../wp-content/...
-            depth=2: wp-content/... → ../../wp-content/...
-        
-        Returns:
-            Number of resources fixed
-        """
+        """Fix relative paths to CSS/JS/images after restructuring."""
         if depth == 0:
             return 0
         
@@ -264,7 +234,6 @@ class StaticSiteFixer:
         for tag in soup.find_all(style=True):
             style = tag['style']
             if 'wp-content/' in style:
-                # Replace url(wp-content/...) with url(../wp-content/...)
                 tag['style'] = re.sub(
                     r'url\(\s*(["\']?)wp-content/',
                     f'url(\\1{prefix}wp-content/',
@@ -274,14 +243,185 @@ class StaticSiteFixer:
         
         return fixed
     
-    def fix_internal_links(self, cwd: Path) -> int:
-        """Fix internal links after restructuring.
+    def fix_css_files(self, cwd: Path) -> int:
+        """Fix absolute URLs inside external CSS files (Elementor issue).
         
-        Updates links like:
-            sectorsbars-pubs.html -> sectors/bars-pubs/
-            servicesdesign.html -> services/design/
-            news-insights.html -> news-insights/
+        CRITICAL FIX: CSS files contain url() references with absolute paths
+        that must be converted to relative paths for GitHub Pages.
+        
+        Example:
+            /wp-content/uploads/elementor/css/post-123.css contains:
+            background: url(http://localhost:8000/wp-content/uploads/bg.jpg)
+            
+            Should be converted to:
+            background: url(../../wp-content/uploads/bg.jpg)
         """
+        css_files = list(cwd.rglob("*.css"))
+        if not css_files:
+            return 0
+        
+        fixed = 0
+        for css_file in css_files:
+            try:
+                content = css_file.read_text(encoding='utf-8', errors='ignore')
+                
+                # Replace http://domain/path with relative path
+                # Match: url(http://localhost:8000/wp-content/uploads/...)
+                # Replace with: url(../../wp-content/uploads/...)
+                modified = re.sub(
+                    r'url\(\s*(["\']?)https?://[^/]+(/[^"\')]+)\1\s*\)',
+                    r'url(.\2)',
+                    content
+                )
+                
+                if modified != content:
+                    css_file.write_text(modified, encoding='utf-8')
+                    fixed += 1
+                    self.css_fixed += 1
+            except Exception:
+                pass
+        
+        return fixed
+    
+    def fix_data_attributes(self, soup: BeautifulSoup) -> int:
+        """Fix data-* attributes containing URLs (Elementor/WP patterns).
+        
+        CRITICAL FIX: Elementor uses custom data attributes for background images,
+        srcset URLs, and other dynamic content that needs path correction.
+        
+        Examples:
+            data-src="/wp-content/uploads/image.jpg"
+            data-background="/wp-content/uploads/bg.jpg"
+            data-settings='{"url":"/wp-content/video.mp4"}'
+        """
+        fixed = 0
+        
+        for tag in soup.find_all(True):  # All tags
+            for attr in list(tag.attrs.keys()):
+                if attr.startswith('data-') and attr not in ['data-id', 'data-type']:
+                    value = tag.get(attr, '')
+                    if isinstance(value, str):
+                        # Check if value contains URL-like patterns
+                        if 'wp-content' in value or 'wp-includes' in value:
+                            # Simple replacement for direct URLs
+                            modified = value.replace('/wp-content/', './wp-content/')
+                            modified = modified.replace('/wp-includes/', './wp-includes/')
+                            
+                            if modified != value:
+                                tag[attr] = modified
+                                fixed += 1
+                                self.data_attrs_fixed += 1
+        
+        return fixed
+    
+    def fix_srcset_attribute(self, img_tag) -> bool:
+        """Fix URLs in srcset attribute.
+        
+        Format: "url1 500w, url2 1000w, url3 2x"
+        """
+        srcset = img_tag.get('srcset', '')
+        if not srcset or 'wp-content' not in srcset:
+            return False
+        
+        parts = []
+        for item in srcset.split(','):
+            item = item.strip()
+            # Split by last space to separate URL from descriptor
+            url, *desc = item.rsplit(' ', 1)
+            
+            # Fix URL
+            fixed_url = url.replace('/wp-content/', './wp-content/')
+            
+            # Reconstruct item
+            new_item = f"{fixed_url} {' '.join(desc)}" if desc else fixed_url
+            parts.append(new_item)
+        
+        new_srcset = ', '.join(parts)
+        if new_srcset != srcset:
+            img_tag['srcset'] = new_srcset
+            return True
+        
+        return False
+    
+    def detect_shortcodes(self, soup: BeautifulSoup) -> List[str]:
+        """Detect remaining WordPress shortcodes.
+        
+        WARNING: These indicate dynamic content that won't work on static site.
+        """
+        shortcodes = []
+        text_content = soup.get_text()
+        
+        # Match [shortcode ...] patterns
+        matches = re.findall(r'\[([a-z_]+)[^\]]*\]', text_content)
+        shortcodes.extend(set(matches))
+        
+        return shortcodes
+    
+    def remove_wordpress_meta_links(self, soup: BeautifulSoup) -> int:
+        """Remove WordPress-specific meta links.
+        
+        These cause 404 errors on static sites:
+            - EditURI (RSD XML-RPC)
+            - wlwmanifest (Windows Live Writer)
+            - shortlink (WordPress internal)
+            - pingback (WordPress pingback)
+        """
+        removed = 0
+        
+        for link in soup.find_all('link', rel=True):
+            rel = link.get('rel', [])
+            if isinstance(rel, str):
+                rel = [rel]
+            
+            if any(r in self.WP_META_RELS for r in rel):
+                link.decompose()
+                removed += 1
+        
+        return removed
+    
+    def remove_problematic_scripts(self, soup: BeautifulSoup) -> int:
+        """Remove inline scripts that reference undefined variables.
+        
+        CRITICAL FIX: These scripts cause console errors on static sites.
+        """
+        removed = 0
+        
+        # Remove script tags by content
+        for script in soup.find_all('script'):
+            if script.string:
+                content = script.string
+                
+                # Check if script contains problematic patterns
+                if any(pattern in content for pattern in self.PROBLEMATIC_PATTERNS):
+                    script.decompose()
+                    removed += 1
+        
+        return removed
+    
+    def fix_canonical_urls(self, soup: BeautifulSoup, target_domain: Optional[str] = None) -> int:
+        """Fix canonical URLs to point to correct domain.
+        
+        Default behavior: Remove canonical tags pointing to localhost
+        """
+        fixed = 0
+        
+        for link in soup.find_all('link', rel='canonical', href=True):
+            href = link['href']
+            
+            # Remove localhost canonical tags
+            if 'localhost' in href or '127.0.0.1' in href:
+                link.decompose()
+                fixed += 1
+            # If target_domain provided, update URL
+            elif target_domain and href.startswith('http'):
+                path = re.sub(r'https?://[^/]+', '', href)
+                link['href'] = f"{target_domain}{path}"
+                fixed += 1
+        
+        return fixed
+    
+    def fix_internal_links(self, cwd: Path) -> int:
+        """Fix internal links after restructuring."""
         if not self.restructure_map:
             return 0
         
@@ -298,11 +438,9 @@ class StaticSiteFixer:
                 soup = BeautifulSoup(content, "lxml")
                 modified = False
                 
-                # Fix <a href="...">
                 for tag in soup.find_all('a', href=True):
                     href = tag['href']
                     
-                    # Check if href matches old filename
                     for old_name, new_path in self.restructure_map.items():
                         if href == old_name or href == f"./{old_name}" or href.endswith(f"/{old_name}"):
                             tag['href'] = new_path
@@ -314,7 +452,7 @@ class StaticSiteFixer:
                     fixed_count += 1
                     
             except Exception:
-                pass  # Silent error handling
+                pass
         
         return fixed_count
     
@@ -322,14 +460,12 @@ class StaticSiteFixer:
         """Remove legacy WordPress scripts."""
         removed = 0
         
-        # Remove script tags
         for script in soup.find_all('script', src=True):
             src = script.get('src', '')
             if any(legacy in src for legacy in self.LEGACY_SCRIPTS):
                 script.decompose()
                 removed += 1
         
-        # Remove inline scripts with legacy code
         for script in soup.find_all('script'):
             if script.string:
                 if any(legacy in script.string for legacy in ['wp.emoji', 'addComment']):
@@ -344,7 +480,6 @@ class StaticSiteFixer:
         if not body:
             return False
         
-        # Navigation fix JavaScript
         nav_fix_js = '''<script>
 // GitHub Pages navigation fix
 (function() {
@@ -352,24 +487,13 @@ class StaticSiteFixer:
 })();
 </script>'''
         
-        # Create script tag
         script_tag = soup.new_tag('script')
         script_tag.string = nav_fix_js.strip()
-        
-        # Insert before </body>
         body.append(script_tag)
         return True
     
     def process_html_file(self, file_path: Path, cwd: Path) -> Tuple[bool, int, int]:
-        """Process a single HTML file.
-        
-        Args:
-            file_path: Path to HTML file
-            cwd: Current working directory (repo root)
-        
-        Returns:
-            (modified, scripts_removed, resources_fixed) tuple
-        """
+        """Process a single HTML file."""
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
             soup = BeautifulSoup(content, "lxml")
@@ -378,15 +502,44 @@ class StaticSiteFixer:
             scripts_removed = 0
             resources_fixed = 0
             
-            # Calculate folder depth for resource path fixing
             rel_path = file_path.relative_to(cwd)
-            depth = len(rel_path.parts) - 1  # news-insights/index.html → depth=1
+            depth = len(rel_path.parts) - 1
             
-            # Fix resource paths (CSS/JS/images)
+            # Fix resource paths
             resources_fixed = self.fix_resource_paths(soup, depth)
             if resources_fixed > 0:
                 modified = True
                 self.resources_fixed += resources_fixed
+            
+            # Fix data attributes (Elementor)
+            data_fixed = self.fix_data_attributes(soup)
+            if data_fixed > 0:
+                modified = True
+                self.data_attrs_fixed += data_fixed
+            
+            # Fix srcset attributes
+            for img in soup.find_all('img'):
+                if self.fix_srcset_attribute(img):
+                    modified = True
+                    self.data_attrs_fixed += 1
+            
+            # Remove WordPress meta links
+            meta_removed = self.remove_wordpress_meta_links(soup)
+            if meta_removed > 0:
+                modified = True
+                self.scripts_removed += meta_removed
+            
+            # Fix canonical URLs
+            canonical_fixed = self.fix_canonical_urls(soup)
+            if canonical_fixed > 0:
+                modified = True
+                self.scripts_removed += canonical_fixed
+            
+            # Remove problematic inline scripts
+            problematic_removed = self.remove_problematic_scripts(soup)
+            if problematic_removed > 0:
+                modified = True
+                self.scripts_removed += problematic_removed
             
             # Remove legacy scripts
             scripts_removed = self.remove_legacy_scripts(soup)
@@ -394,12 +547,16 @@ class StaticSiteFixer:
                 modified = True
                 self.scripts_removed += scripts_removed
             
+            # Detect shortcodes (warning)
+            shortcodes = self.detect_shortcodes(soup)
+            if shortcodes and file_path.name != '404.html':
+                self.shortcodes_detected.append((file_path.name, shortcodes))
+            
             # Inject navigation fix
             if self.inject_navigation_fix(soup):
                 modified = True
                 self.js_injected += 1
             
-            # Save if modified
             if modified:
                 file_path.write_text(str(soup), encoding="utf-8")
                 return True, scripts_removed, resources_fixed
@@ -410,18 +567,23 @@ class StaticSiteFixer:
             return False, 0, 0
     
     def run(self) -> int:
-        """Execute static site fixing with verbose restructure, compact other steps."""
+        """Execute static site fixing."""
         cwd = Path.cwd()
         
-        # STEP 1: Restructure files (VERBOSE)
+        # STEP 1: Restructure files
         self.restructure_files(cwd)
         
-        # STEP 2: Fix internal links after restructuring (COMPACT)
+        # STEP 2: Fix CSS files (Elementor)
+        css_fixed = self.fix_css_files(cwd)
+        if css_fixed > 0:
+            print(f"✅ Fixed URLs in {css_fixed} CSS file(s)\n")
+        
+        # STEP 3: Fix internal links
         fixed_files = self.fix_internal_links(cwd)
         if self.links_fixed > 0:
-            print(f"✅ Fixed {self.links_fixed} internal links in {fixed_files} files\n")
+            print(f"✅ Fixed {self.links_fixed} internal links\n")
         
-        # STEP 3: Find HTML files (after restructuring) (COMPACT)
+        # STEP 4: Process HTML files
         html_files = [
             f for f in cwd.rglob("*.html")
             if ".git" not in f.parts and ".github" not in f.parts
@@ -431,18 +593,29 @@ class StaticSiteFixer:
             print("⚠️ No HTML files found")
             return 0
         
-        # Process files silently
         for html_file in html_files:
             modified, removed, resources = self.process_html_file(html_file, cwd)
             if modified:
                 self.files_processed += 1
         
-        # Compact summary for processing
+        # Summary
         if self.resources_fixed > 0:
-            print(f"✅ Fixed {self.resources_fixed} resource paths (CSS/JS/images)\n")
+            print(f"✅ Fixed {self.resources_fixed} resource paths\n")
+        
+        if self.data_attrs_fixed > 0:
+            print(f"✅ Fixed {self.data_attrs_fixed} data attributes (Elementor)\n")
         
         if self.scripts_removed > 0:
-            print(f"✅ Removed {self.scripts_removed} legacy scripts from {self.files_processed} files\n")
+            print(f"✅ Removed {self.scripts_removed} problematic scripts/links\n")
+        
+        # Shortcode warnings
+        if self.shortcodes_detected:
+            print("⚠️  DETECTED DYNAMIC SHORTCODES (won't work on static site):")
+            for filename, shortcodes in self.shortcodes_detected[:5]:  # Show first 5
+                print(f"    {filename}: {', '.join(shortcodes[:3])}")  # Show first 3 shortcodes
+            if len(self.shortcodes_detected) > 5:
+                print(f"    ... and {len(self.shortcodes_detected) - 5} more file(s)")
+            print()
         
         return 0
 
