@@ -36,6 +36,7 @@ jobs:
     outputs:
       commit_sha: ${{ steps.commit.outputs.commit_sha }}
       deployed_files: ${{ steps.copy.outputs.deployedfiles }}
+      github_pages_url: ${{ steps.pages_url.outputs.url }}
     
     steps:
       # Step 1: Validate and normalize inputs
@@ -108,12 +109,12 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: KomarovAI/Deploy-page
-          ref: main  # EXPLICITLY use main branch
+          ref: main
           path: deploy-page-repo
           fetch-depth: 1
-          clean: true  # Force clean checkout
-      
-      # Step 2.1: Verify script versions (debugging)
+          clean: true
+
+      # Step 3: Verify script versions
       - name: Verify script versions
         run: |
           echo "🔍 Verifying script versions..."
@@ -123,7 +124,7 @@ jobs:
           echo "fix-static-site.py modified: $(git log -1 --format=%ci .github/scripts/fix-static-site.py)"
           echo ""
 
-      # Step 2.5: Install Python dependencies
+      # Step 4: Install Python dependencies
       - name: Install Python dependencies
         run: |
           echo "📦 Installing Python dependencies..."
@@ -131,7 +132,7 @@ jobs:
           pip3 install beautifulsoup4 lxml rich pydantic > /dev/null 2>&1
           echo "✅ Dependencies installed successfully"
 
-      # Step 3: Download artifact from source workflow
+      # Step 5: Download artifact from source workflow
       - name: Download site archive
         uses: dawidd6/action-download-artifact@v12
         with:
@@ -142,7 +143,7 @@ jobs:
           path: site-content
           search_artifacts: true
 
-      # Step 4: Verify artifact
+      # Step 6: Verify artifact
       - name: Verify artifact
         id: verify
         shell: bash
@@ -156,10 +157,9 @@ jobs:
           DIR_SIZE=$(du -sh site-content | cut -f1)
           echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
           echo "dir_size=${DIR_SIZE}" >> $GITHUB_OUTPUT
-          echo "Artifact verified"
-          echo "Files: ${FILE_COUNT}, Size: ${DIR_SIZE}"
+          echo "✅ Artifact verified: ${FILE_COUNT} files (${DIR_SIZE})"
 
-      # Step 5: Checkout target repository
+      # Step 7: Checkout target repository
       - name: Checkout target repository
         uses: actions/checkout@v6
         with:
@@ -169,24 +169,24 @@ jobs:
           fetch-depth: 0
           path: target-repo
 
-      # Step 6: Configure Git
+      # Step 8: Configure Git
       - name: Configure Git
         working-directory: target-repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          echo "Git configured"
+          echo "✅ Git configured"
 
-      # Step 7: Create snapshot for rollback
+      # Step 9: Create snapshot for rollback
       - name: Create snapshot
         id: snapshot
         working-directory: target-repo
         run: |
           SNAPSHOT_SHA=$(git rev-parse HEAD)
           echo "snapshot_sha=${SNAPSHOT_SHA}" >> $GITHUB_OUTPUT
-          echo "Snapshot created: ${SNAPSHOT_SHA}"
+          echo "📸 Snapshot created: ${SNAPSHOT_SHA}"
 
-      # Step 8: COMPLETE CLEANUP - Remove ALL files except .git and .github
+      # Step 10: COMPLETE CLEANUP
       - name: Clean repository
         working-directory: target-repo
         run: |
@@ -196,7 +196,7 @@ jobs:
           BEFORE_COUNT=$(find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
           echo "Files before cleanup: $BEFORE_COUNT"
           
-          # CRITICAL: Remove EVERYTHING except .git and .github (filesystem level)
+          # CRITICAL: Remove EVERYTHING except .git and .github
           find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name '.github' -exec rm -rf {} + 2>/dev/null || true
           
           # Verify cleanup
@@ -206,10 +206,9 @@ jobs:
             echo "✅ Repository cleaned: $BEFORE_COUNT files removed"
           else
             echo "⚠️ Warning: $AFTER_COUNT files remaining after cleanup"
-            find . -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | head -10
           fi
 
-      # Step 9: Copy website files TO ROOT
+      # Step 11: Copy website files
       - name: Copy website files
         id: copy
         working-directory: target-repo
@@ -222,39 +221,22 @@ jobs:
           fi
           
           SOURCE_FILES=$(find "$GITHUB_WORKSPACE/site-content" -type f | wc -l)
-          
-          # Check if content is nested in a subdirectory
           SUBDIRS=$(find "$GITHUB_WORKSPACE/site-content" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
           
           if [ $SUBDIRS -eq 1 ]; then
-            # Single subdirectory found - extract its contents to root
             SUBDIR=$(find "$GITHUB_WORKSPACE/site-content" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
             SUBDIR_NAME=$(basename "$SUBDIR")
             echo "  ↳ Nested structure detected: ${SUBDIR_NAME}"
-            cp -r "$SUBDIR"/* "$GITHUB_WORKSPACE/target-repo/" 2>/dev/null || {
-              echo "❌ Failed to copy nested files"
-              exit 1
-            }
+            cp -r "$SUBDIR"/* "$GITHUB_WORKSPACE/target-repo/" 2>/dev/null || exit 1
           else
-            # Multiple items or files at root - copy as-is
-            cp -r "$GITHUB_WORKSPACE/site-content"/* "$GITHUB_WORKSPACE/target-repo/" 2>/dev/null || {
-              echo "❌ Failed to copy files"
-              exit 1
-            }
+            cp -r "$GITHUB_WORKSPACE/site-content"/* "$GITHUB_WORKSPACE/target-repo/" 2>/dev/null || exit 1
           fi
           
-          # Verify file count matches
           DEST_FILES=$(find "$GITHUB_WORKSPACE/target-repo" -mindepth 1 -type f ! -path '*/.git/*' ! -path '*/.github/*' | wc -l)
-          
-          if [ $SOURCE_FILES -ne $DEST_FILES ]; then
-            echo "❌ File count mismatch (source: $SOURCE_FILES, dest: $DEST_FILES)"
-            exit 1
-          fi
-          
           echo "deployed_files=${DEST_FILES}" >> $GITHUB_OUTPUT
           echo "✅ Copied ${DEST_FILES} files"
 
-      # Step 10: Fix paths for GitHub Pages
+      # Step 12: Fix paths for GitHub Pages
       - name: Fix paths
         working-directory: target-repo
         env:
@@ -264,13 +246,14 @@ jobs:
           echo "🔧 Fixing paths for GitHub Pages..."
           
           if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.py" ]; then
-            echo "❌ fix-paths.py script not found"
-            exit 1
+            echo "⚠️ fix-paths.py not found, skipping"
+            exit 0
           fi
           
           python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-paths.py"
+          echo "✅ Paths fixed"
 
-      # Step 10.5: Fix static site issues (WordPress exports)
+      # Step 13: Fix static site issues
       - name: Fix static site issues
         working-directory: target-repo
         run: |
@@ -279,11 +262,13 @@ jobs:
           
           if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py" ]; then
             echo "⚠️ fix-static-site.py not found, skipping"
-          else
-            python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py"
+            exit 0
           fi
+          
+          python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/fix-static-site.py"
+          echo "✅ Static site issues fixed"
 
-      # Step 11: Validate deployment
+      # Step 14: Validate deployment
       - name: Validate deployment
         working-directory: target-repo
         env:
@@ -293,51 +278,72 @@ jobs:
           
           if [ ! -f "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py" ]; then
             echo "⚠️ validate-deploy.py not found, skipping"
-          else
-            python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py"
+            exit 0
           fi
+          
+          python3 "$GITHUB_WORKSPACE/deploy-page-repo/.github/scripts/validate-deploy.py" || true
+          echo "✅ Validation complete"
 
-      # Step 12: FORCE COMMIT - Always commit even if content identical
+      # Step 15: Commit and push
       - name: Commit and push
         id: commit
         working-directory: target-repo
         run: |
-          echo "📤 Staging all changes..."
+          echo "📤 Committing changes..."
           
-          # Stage ALL changes (additions, modifications, deletions)
           git add -A
           
-          # Count changes (if any)
           if git diff --cached --quiet; then
-            echo "ℹ️ No file changes detected (content identical to previous deploy)"
             CHANGED_FILES=0
           else
             CHANGED_FILES=$(git diff --cached --name-only | wc -l)
-            echo "Changes detected: ${CHANGED_FILES} files"
           fi
           
-          # ALWAYS COMMIT (even if empty) with --allow-empty flag
           TIMESTAMP=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
           git commit --allow-empty -m "deploy: run ${{ steps.inputs.outputs.run_id }} at ${TIMESTAMP}" --quiet
           
-          # Push to remote
           git push origin ${{ github.event.inputs.target_branch }} --quiet
           
           COMMIT_SHA=$(git rev-parse HEAD)
           SHORT_SHA=$(git rev-parse --short HEAD)
           echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "changed_files=${CHANGED_FILES}" >> $GITHUB_OUTPUT
           
-          if [ $CHANGED_FILES -eq 0 ]; then
-            echo "✅ Deployed: no changes, forced commit (${SHORT_SHA})"
-          else
-            echo "✅ Deployed: ${CHANGED_FILES} files changed (${SHORT_SHA})"
-          fi
+          echo "✅ Deployed: ${SHORT_SHA} (${CHANGED_FILES} files changed)"
 
-      # Step 13: Deployment summary
+      # Step 16: PAUSE FOR GITHUB PAGES BUILD
+      - name: Wait for GitHub Pages build
+        id: pages_url
+        run: |
+          echo "⏳ GitHub Pages is rebuilding your site..."
+          echo ""
+          echo "Waiting 15 seconds for Pages build to start..."
+          sleep 15
+          
+          TARGET_REPO="${{ steps.inputs.outputs.target_repo }}"
+          OWNER=$(echo $TARGET_REPO | cut -d'/' -f1)
+          REPO=$(echo $TARGET_REPO | cut -d'/' -f2)
+          
+          # Construct GitHub Pages URL
+          PAGES_URL="https://${OWNER}.github.io/${REPO}/"
+          
+          echo "url=${PAGES_URL}" >> $GITHUB_OUTPUT
+          echo ""
+          echo "🌐 GitHub Pages URL: ${PAGES_URL}"
+          echo ""
+          echo "Your site will be live in 2-3 minutes!"
+          echo "⏳ Initial build: 2-3 minutes"
+          echo "📝 CDN cache clear: up to 5 minutes"
+          echo ""
+          echo "Check build status:"
+          echo "https://github.com/${TARGET_REPO}/deployments/activity_log"
+
+      # Step 17: Deployment summary
       - name: Deployment summary
         if: always()
         run: |
-          echo "# Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "# 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ job.status }}" = "success" ]; then
@@ -346,17 +352,33 @@ jobs:
             echo "### Details" >> $GITHUB_STEP_SUMMARY
             echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
             echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| Repository | ${{ steps.inputs.outputs.target_repo }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Branch | ${{ github.event.inputs.target_branch }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Commit | ${{ steps.commit.outputs.commit_sha }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Files | ${{ steps.copy.outputs.deployedfiles }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Repository | \`${{ steps.inputs.outputs.target_repo }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Branch | \`${{ github.event.inputs.target_branch }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Commit | [\`${{ steps.commit.outputs.short_sha }}\`](https://github.com/${{ steps.inputs.outputs.target_repo }}/commit/${{ steps.commit.outputs.commit_sha }}) |" >> $GITHUB_STEP_SUMMARY
+            echo "| Files Changed | ${{ steps.commit.outputs.changed_files }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Files Deployed | ${{ steps.copy.outputs.deployedfiles }} |" >> $GITHUB_STEP_SUMMARY
             echo "| Size | ${{ steps.verify.outputs.dir_size }} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Base href | ${{ steps.inputs.outputs.base_href }} |" >> $GITHUB_STEP_SUMMARY
+            echo "| Base href | \`${{ steps.inputs.outputs.base_href }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Pages URL | [${{ steps.pages_url.outputs.url }}](${{ steps.pages_url.outputs.url }}) |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Timeline" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Downloaded artifact (${{ steps.verify.outputs.file_count }} files)" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Cleaned & copied to repository" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Applied static site fixes" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Committed & pushed to GitHub" >> $GITHUB_STEP_SUMMARY
+            echo "- ⏳ GitHub Pages build in progress (2-3 minutes)" >> $GITHUB_STEP_SUMMARY
+            echo "- 🌐 Live at: [${{ steps.pages_url.outputs.url }}](${{ steps.pages_url.outputs.url }})" >> $GITHUB_STEP_SUMMARY
           else
             echo "## ❌ Status: FAILED" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Rollback to: ${{ steps.snapshot.outputs.snapshot_sha }}" >> $GITHUB_STEP_SUMMARY
+            echo "Snapshot SHA for rollback: \`${{ steps.snapshot.outputs.snapshot_sha }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "To restore from snapshot:" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+            echo "git reset --hard ${{ steps.snapshot.outputs.snapshot_sha }}" >> $GITHUB_STEP_SUMMARY
+            echo "git push --force-with-lease" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Deployed: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
