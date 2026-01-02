@@ -93,6 +93,7 @@ class StaticSiteFixer:
         self.css_fixed = 0
         self.data_attrs_fixed = 0
         self.base_tags_added = 0
+        self.relative_links_fixed = 0
         self.shortcodes_detected = []
         self.restructure_map: Dict[str, str] = {}
         self.broken_links = []
@@ -195,6 +196,105 @@ class StaticSiteFixer:
                 issues.append(href)
         
         return issues
+    
+    def make_absolute(self, href: str) -> str:
+        """⭐ NEW: Convert relative link to absolute.
+        
+        Examples:
+            services              → /services/
+            ./maintenance         → /maintenance/
+            ../sectors/cafes      → /sectors/cafes/
+            ./services/booking.html → /services/booking.html
+            /services             → /services/
+        
+        Returns:
+            Absolute path starting with /
+        """
+        # Skip external and special links
+        if href.startswith(('http://', 'https://', '#', 'mailto:', 'tel:', 'data:', '//', 'javascript:')):
+            return href
+        
+        # Already absolute
+        if href.startswith('/'):
+            # Ensure trailing slash for directories (no file extension)
+            if not href.endswith('/') and '.' not in href.split('/')[-1]:
+                return href + '/'
+            return href
+        
+        # Empty or just anchor
+        if not href or href == '.':
+            return href
+        
+        # Remove ./ prefix
+        href = href.lstrip('./')
+        
+        # Handle ../ (remove them - assume link to root)
+        while href.startswith('../'):
+            href = href[3:]
+        
+        # Ensure starts with /
+        if not href.startswith('/'):
+            href = '/' + href
+        
+        # Add trailing slash if it's a directory (no file extension)
+        if not href.endswith('/') and '.' not in href.split('/')[-1]:
+            href = href + '/'
+        
+        return href
+    
+    def fix_relative_links(self, cwd: Path) -> int:
+        """⭐ CRITICAL: Convert all relative links to absolute after restructuring.
+        
+        PROBLEM: After moving book-a-callout.html → book-a-callout/index.html,
+        relative links break:
+        - OLD: book-a-callout.html → <a href="services"> points to services.html ✅
+        - NEW: book-a-callout/index.html → <a href="services"> looks in book-a-callout/services ❌
+        
+        SOLUTION: Convert ALL relative links to absolute:
+        <a href="services">              → <a href="/services/">
+        <a href="./maintenance">         → <a href="/maintenance/">
+        <a href="sectors/cafes">         → <a href="/sectors/cafes/">
+        
+        This ensures links work regardless of page nesting depth.
+        """
+        html_files = [
+            f for f in cwd.rglob("*.html")
+            if ".git" not in f.parts and ".github" not in f.parts
+        ]
+        
+        if not html_files:
+            return 0
+        
+        fixed_count = 0
+        total_links_fixed = 0
+        
+        for html_file in html_files:
+            try:
+                content = html_file.read_text(encoding="utf-8", errors="ignore")
+                soup = BeautifulSoup(content, "lxml")
+                modified = False
+                file_links_fixed = 0
+                
+                # Fix ALL <a> tags with href
+                for tag in soup.find_all('a', href=True):
+                    href = tag['href']
+                    new_href = self.make_absolute(href)
+                    
+                    if new_href != href:
+                        tag['href'] = new_href
+                        modified = True
+                        file_links_fixed += 1
+                        total_links_fixed += 1
+                
+                if modified:
+                    html_file.write_text(str(soup), encoding="utf-8")
+                    fixed_count += 1
+                    
+            except Exception as e:
+                pass  # Skip files with errors
+        
+        self.relative_links_fixed = total_links_fixed
+        return fixed_count
     
     def validate_links(self, cwd: Path) -> int:
         """Validate all links exist (integrated, token-optimized)"""
@@ -698,6 +798,16 @@ class StaticSiteFixer:
         # STEP 1: Restructure files
         self.restructure_files(cwd)
         
+        # STEP 1.5: ⭐ NEW: Fix relative links to absolute after restructuring
+        print("\n🔗 FIXING RELATIVE LINKS TO ABSOLUTE:")
+        print("━" * 80)
+        fixed_link_files = self.fix_relative_links(cwd)
+        if self.relative_links_fixed > 0:
+            print(f"✅ Fixed {self.relative_links_fixed} relative links in {fixed_link_files} file(s)")
+            print("   → services → /services/, ./maintenance → /maintenance/, etc.\n")
+        else:
+            print("✓ No relative links to fix\n")
+        
         # STEP 2: Fix CSS files (Elementor)
         css_fixed = self.fix_css_files(cwd)
         if css_fixed > 0:
@@ -726,7 +836,7 @@ class StaticSiteFixer:
         # Summary
         if self.base_tags_added > 0:
             print(f"\n⭐ Added <base href=\"{base_href}\"> tags: {self.base_tags_added} files")
-            print("   → Fixes nested page link issues\n")
+            print("   → Fallback for nested page link issues\n")
         
         if self.relative_path_issues:
             print(f"⚠️  Found {len(self.relative_path_issues)} potential relative path issues:")
@@ -734,7 +844,7 @@ class StaticSiteFixer:
                 print(f"   - {issue}")
             if len(self.relative_path_issues) > 10:
                 print(f"   ... and {len(self.relative_path_issues) - 10} more")
-            print("   → <base> tag should handle these\n")
+            print("   → Should be fixed by relative link conversion above\n")
         
         if self.resources_fixed > 0:
             print(f"✅ Fixed {self.resources_fixed} resource paths\n")
