@@ -69,7 +69,7 @@ jobs:
           repository: ${{ github.event.inputs.target_repo }}
           ref: ${{ github.event.inputs.target_branch }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.EXTERNAL_REPO_PAT }}
 
       - name: ⚙️ Configure Git
         run: |
@@ -141,6 +141,8 @@ jobs:
             fi
             echo "✅ Safe push complete!"
           fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.EXTERNAL_REPO_PAT }}
 
       - name: 📋 Create detailed summary
         if: success()
@@ -191,10 +193,12 @@ jobs:
           - ✓ Commit exists in the repository
           - ✓ Branch name is correct
           - ✓ You have write permissions to the repository
+          - ✓ EXTERNAL_REPO_PAT secret is configured and has write permissions
           
           **Common Issues:**
           - Invalid repository format
           - Commit not found
           - Branch doesn't exist
           - Force push disabled and history diverged
+          - EXTERNAL_REPO_PAT not configured or expired
           EOF
