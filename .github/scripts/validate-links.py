@@ -21,8 +21,17 @@ class LinkExtractor(HTMLParser):
                 if attr in ['href', 'src'] and value:
                     self.links.append(value)
 
-def is_wp_artifact(link_path):
+def is_wp_artifact(link):
     """Check if link is WordPress CMS artifact that shouldn't exist in static export"""
+    # Skip protocol-based URLs and data URIs
+    if link.startswith(('http://', 'https://', '#', 'mailto:', 'tel:', 'javascript:', 'data:')):
+        return True
+    
+    # Skip OEmbed and REST API
+    if 'wp-json' in link or 'oembed' in link.lower():
+        return True
+    
+    link_path = urlparse(link).path.split('?')[0]
     wp_patterns = (
         'wp-json/',          # REST API endpoints
         'wp-content/plugins/',  # Plugin files
@@ -44,16 +53,12 @@ def validate_site(site_path):
                 parser.feed(f.read())
                 
                 for link in parser.links:
-                    # Skip external/anchors
-                    if link.startswith(('http://', 'https://', '#', 'mailto:', 'tel:', 'javascript:')):
+                    # Skip WordPress artifacts and protocols
+                    if is_wp_artifact(link):
                         continue
                     
                     # Normalize path
                     link_path = urlparse(link).path.split('?')[0]
-                    
-                    # Skip WordPress artifacts
-                    if is_wp_artifact(link_path):
-                        continue
                     
                     # Resolve relative to HTML file location
                     if link_path.startswith('/'):
