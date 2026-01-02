@@ -8,7 +8,7 @@
 [![Workflow-Only](https://img.shields.io/badge/Execution-Workflow%20Only-orange?style=for-the-badge&logo=github-actions)](https://github.com/KomarovAI/Deploy-page)
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-success?style=for-the-badge)](https://github.com/KomarovAI/Deploy-page)
 
-**Automated static site deployment to GitHub Pages** through GitHub Actions workflow orchestration with artifact-based content delivery, intelligent path rewriting, and zero-downtime rollback mechanisms.
+**Automated static site deployment to GitHub Pages** through GitHub Actions workflow orchestration with artifact-based content delivery, intelligent path rewriting, link validation, automatic sitemap generation, and zero-downtime rollback mechanisms.
 
 ---
 
@@ -27,7 +27,7 @@ gh workflow run deploy.yml -f run_id=12345 -f target_repo=user/repo -f base_href
 
 ---
 
-## 🐍 Python-Only Architecture (v3.1.0)
+## 🐍 Python-Only Architecture (v3.2.0)
 
 > **⚠️ IMPORTANT:** This project uses **ONLY Python** and Python libraries. No bash/sed/awk complexity!
 
@@ -163,6 +163,10 @@ except ImportError:
 - **Python-Based Processing** - BeautifulSoup DOM manipulation (NO bash/sed!)
 - **WordPress Static Site Fixes** - Removes legacy JS conflicts
 - **Navigation Click Handler Fix** - Fast clicks work properly
+- **Link Validation** - Checks all local links before deployment
+- **Broken Links Report** - JSON export for CI/CD integration
+- **Sitemap Auto-Generation** - Creates sitemap.xml from HTML structure
+- **Robots.txt Support** - Ready for SEO optimization
 - **Idempotent Scripts** - Safe to run multiple times
 - **Automatic Rollback** - Git snapshot restoration on failure
 - **Soft/Strict Validation** - Choose between warnings or hard failures
@@ -183,7 +187,7 @@ except ImportError:
 
 ## 🔧 Processing Pipeline
 
-### 1. Path Rewriting (fix-paths.sh)
+### 1. Path Rewriting
 
 **Technology:** Pure Python with BeautifulSoup + lxml
 
@@ -229,7 +233,7 @@ class PathFixer:
 - ✅ Rich progress bars
 - ✅ Detailed per-file logging
 
-### 2. Static Site Fixes (fix-static-site.sh)
+### 2. Static Site Fixes
 
 **Technology:** Pure Python with BeautifulSoup + lxml
 
@@ -267,88 +271,71 @@ class PathFixer:
        file.unlink()
    ```
 
-#### Example Output (with rich)
+### 3. Link Validation ⭐ NEW v3.2.0
 
-```
-╭────────────────────────────────────╮
-│ 🚀 Static Site Fixer              │
-│ Fixing: WordPress static exports  │
-╰────────────────────────────────────╯
+**Technology:** Pure Python HTMLParser + pathlib
 
-⠋ Processing HTML files... ━━━━━━━━━━━━━━━━━━ 36/36 100%
-
-           📊 Summary            
-┏━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┓
-┃ Metric                ┃ Value ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━┩
-│ HTML files scanned    │ 36    │
-│ Files modified        │ 35    │
-│ Navigation fixes      │ 35    │
-│ Legacy scripts removed│ 12    │
-└───────────────────────┴───────┘
-
-✨ Successfully fixed 35 file(s)!
-```
-
-### 3. Validation (validate-deploy.sh)
-
-**Technology:** Pure Python with BeautifulSoup + lxml + pydantic
-
-Performs comprehensive checks:
+Validates all local links before deployment:
 
 ```python
-from pydantic import BaseModel, Field
-
-class PathIssue(BaseModel):
-    """Type-safe validation model."""
-    file: str
-    bad_hrefs: List[str] = Field(max_items=10)
-    bad_srcs: List[str] = Field(max_items=10)
-
-# Automatic validation!
-for html_file in html_files:
-    soup = BeautifulSoup(content, "lxml")  # Fast parser
-    # ... validation logic
+class LinkValidator(HTMLParser):
+    """Extract links from HTML"""
+    def __init__(self):
+        super().__init__()
+        self.links = []
+    
+    def handle_starttag(self, tag, attrs):
+        if tag in ['a', 'link', 'script', 'img', 'source']:
+            for attr, value in attrs:
+                if attr in ['href', 'src'] and value:
+                    self.links.append(value)
 ```
 
-#### Validation Modes
+**Features:**
+- ✅ Scans all HTML files (href, src attributes)
+- ✅ Checks local link targets exist
+- ✅ Skips external URLs, mailto:, anchors
+- ✅ Generates `broken-links.json` for CI/CD
+- ✅ Shows first 50 broken links (prevents spam)
+- ✅ Full report in JSON for processing
 
-🟢 **Soft Mode (Default)** - Root-relative paths → Warning (⚠️)  
-🔴 **Strict Mode** - Root-relative paths → Error (❌) + Rollback
-
-Enable strict: Set `STRICT_VALIDATION=true` in workflow
-
-#### Checks Performed
-
-| Check | Type | Failure Behavior |
-|-------|------|------------------|
-| `index.html` exists | Error | Rollback |
-| `index.html` > 100 bytes | Error | Rollback |
-| File count matches source | Error | Rollback |
-| Root-relative paths | Soft: Warn / Strict: Error | Continue / Rollback |
-| Base href in subpath | Warning | Continue |
-| Double slashes | Warning | Continue |
-
-#### Output (with rich panels)
-
+**Example Output:**
 ```
-╭───────────────────────────────────╮
-│ 🔍 Deployment Validator          │
-│ Mode: SOFT                        │
-│ Using: BeautifulSoup + lxml       │
-╰───────────────────────────────────╯
+🔍 Validating links in ./site...
+✅ All 2,345 links valid
 
-⠋ Scanning HTML files... ━━━━━━━━━━━━━━━━━━ 45/45 100%
-
-✅ All paths are relative or external
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-✅ VALIDATION PASSED
-No errors or warnings
-
-📝 Log saved to /tmp/validate-deploy-20260101-173047.log
+✅ Generated sitemap.xml (1,247 URLs)
 ```
+
+### 4. Sitemap Auto-Generation ⭐ NEW v3.2.0
+
+**Technology:** Pure Python pathlib + XML generation
+
+Automatically creates `sitemap.xml` from HTML structure:
+
+```python
+def generate_sitemap(self, cwd: Path, domain: str = "https://example.com") -> bool:
+    """Auto-generate sitemap.xml from HTML files"""
+    urls = []
+    
+    for html_file in sorted(cwd.rglob("*.html")):
+        # ... process URLs
+    
+    sitemap = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="...">
+    # ... add URLs
+    
+    (cwd / "sitemap.xml").write_text(sitemap, encoding='utf-8')
+    return True
+```
+
+**Features:**
+- ✅ Handles nested paths correctly
+- ✅ Proper URL formatting for index.html
+- ✅ W3C sitemap.org compliant
+- ✅ Ready for Google/Bing webmaster tools
+- ✅ Single file (no extra config needed)
+
+---
 
 ## 📁 Repository Structure
 
@@ -389,6 +376,8 @@ Extension kept for backward compatibility with existing workflows.
 | Push failed: 403 | PAT permissions | Add `contents:write` to PAT |
 | Validation too strict | Default strict mode | Set `STRICT_VALIDATION=false` |
 | Want stricter validation | Default soft mode | Set `STRICT_VALIDATION=true` in workflow |
+| Broken links in report | Invalid local paths | Check relative paths are correct |
+| Sitemap.xml not created | No HTML files found | Ensure HTML files exist in deployment |
 
 ### Debug Mode
 
@@ -400,6 +389,20 @@ env:
 ```
 
 ## 📊 Version History
+
+### v3.2.0 (2026-01-02) — Link Validation + Sitemap 🆕
+
+**Added:**
+- ✨ **Link Validator** - Checks all local links before deployment
+- ✨ **Sitemap Auto-Generator** - Creates sitemap.xml from HTML structure
+- ✨ **Broken Links JSON Report** - CI/CD integration ready
+- 📈 **-0 KB overhead** - Integrated into fix-static-site.py (no extra files!)
+
+**Features:**
+- Token-optimized (no extra files, single entry point)
+- W3C compliant sitemap generation
+- First 50 broken links saved to JSON
+- Silent on success, verbose on failure
 
 ### v3.1.0 (2026-01-01) — Premium Libraries 🚀
 
@@ -449,4 +452,4 @@ MIT - Free for commercial use
 
 ---
 
-**⚡ Built with 100% Python** | Production libraries only | Zero bash complexity | Token-efficient documentation
+**⚡ Built with 100% Python** | Production libraries only | Zero bash complexity | Token-efficient documentation | Link validation included
